@@ -1,0 +1,1894 @@
+---
+title: "5 Hazard Flags and BER"
+author: "Katie Paul Friedman"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    collapsed: yes
+    df_print: paged
+    lightbox: no
+    number_sections: yes
+    self_contained: yes
+    thumbnails: no
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE}
+library(caret)
+library(cowplot)
+library(data.table)
+library(DescTools)
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(ggpmisc)
+library(ggstance)
+library(gplots)
+library(grid)
+library(gridExtra)
+library(httk)
+library(kableExtra)
+library(jtools)
+library(openxlsx)
+library(parallel)
+library(plotly)
+library(randomForest)
+library(RMySQL)
+library(stringr)
+library(tictoc)
+library(tidyr)
+library(tcpl)
+library(viridis)
+
+
+## this section for ComplexHeatmap ##
+
+#if (!require("BiocManager", quietly = TRUE))
+#  install.packages("BiocManager")
+
+#BiocManager::install("ComplexHeatmap")
+library(circlize)
+library(ComplexHeatmap)
+
+```
+
+
+# Load Data {.tabset .tabset-fade .tabset-pills}
+
+```{r, warning=FALSE}
+
+load(file='./source/in_vitro/tier1_NAMs_apcra_pro_02262024.RData')
+load(file='./source/chem/apcra_chem_ad.RData')
+asnm.tier1.all.invivo <- read.xlsx('./output/asnm_tier1_all_invivo.xlsx', colNames = TRUE, sheet=1) %>% as.data.table()
+seem3 <- fread('./source/exposure/SupTable-all.chem.preds-2018-11-28.txt')
+
+# I tried using this RData from Git but it did not contain any of our DTXSIDs:
+#load('./source/exposure/new.chem.preds-2019-12-13.RData')
+#seem3 <- chem.preds
+```
+
+```{r, warning=FALSE}
+colnames(mega.mc5) # this is going to have the hazard information we need
+```
+# Calculating BERs {.tabset .tabset-fade .tabset-pills}
+
+## Examine and add SEEM3
+
+* Here are the 8 APCRA substances for which there are no SEEM3 data reported.
+* They appear generally to be salts, with a few that are not.
+
+```{r, warning=FALSE}
+seem.apcra <- seem3[dsstox_substance_id %in% apcra.list[,DTXSID]] # only 193...
+
+apcra.list[!DTXSID %in% seem.apcra$dsstox_substance_id]
+```
+
+* Fifteen chemicals had missing SEEM3 U95 values, see below.
+
+```{r, warning=FALSE}
+seem.apcra[is.na(seem3.u95) & !is.na(seem3)]
+```
+
+* For these, the median SEEM3 estimate was substituted.
+* log10-SEEM3 values were also calculated for log10 BER computation.
+
+```{r, warning=FALSE}
+seem.apcra[is.na(seem3.u95)& !is.na(seem3), seem3.u95 := seem3]
+seem.apcra[,seem3.log10 := log10(seem3)]
+seem.apcra[,seem3.u95.log10 := log10(seem3.u95)]
+
+```
+
+* Adding in SEEM3 to the sheet and calculating BERs.
+
+```{r calc-bers, warning=FALSE}
+
+asnm.tier1.all.invivo$seem3.u95.log10 <- seem.apcra$seem3.u95.log10[match(asnm.tier1.all.invivo$dsstox_substance_id,
+                                                seem.apcra$dsstox_substance_id)]
+
+asnm.tier1.all.invivo$seem3.log10 <- seem.apcra$seem3.log10[match(asnm.tier1.all.invivo$dsstox_substance_id,
+                                                seem.apcra$dsstox_substance_id)]
+
+asnm.tier1.all.invivo[,ber.targeted := median(aed50.atg,
+                                    aed50.bsk,
+                                    aed50.ccte,
+                                    aed50.nvs, na.rm=TRUE) - seem3.u95.log10]
+
+
+asnm.tier1.all.invivo[,ber.httr := median(aed50.httr.heparg,
+                                       aed50.httr.u2os,
+                                       aed50.httr.mcf7, na.rm=TRUE) - seem3.u95.log10]
+
+
+asnm.tier1.all.invivo[,ber.htpp := ifelse(!is.na(aed50.htpp.u2os), aed50.htpp.u2os - seem3.u95.log10, NA)]
+
+
+asnm.tier1.all.invivo[,ber.astar := median(aed50.astar.beas2b,
+                                    aed50.astar.hek293,
+                                    aed50.astar.hepg2,
+                                    na.rm=TRUE) - seem3.u95.log10]
+
+asnm.tier1.all.invivo[,ber.med.aed50 := med.aed50 - seem3.u95.log10]
+
+review <- 
+asnm.tier1.all.invivo[ber.med.aed50 < 4]
+```
+
+* In general, BER was NA when SEEM3 was missing, except for one silane with no median AED50.
+
+```{r, warning=FALSE}
+asnm.tier1.all.invivo[is.na(ber.med.aed50), c('chnm','med.aed50','seem3.u95.log10')] # these are missing exposure values and/or bioactivity values
+
+```
+
+* 56 APCRA pro only chemicals with BER <4
+* 40 APCRA pro only chemicals with BER <3
+
+```{r, warning=FALSE}
+asnm.tier1.all.invivo <- asnm.tier1.all.invivo[order(-ber.med.aed50)]
+asnm.tier1.all.invivo[ber.med.aed50 < 4 & apcra.pro.only==1, 
+                      c('chnm','apcra.pro.only','med.aed50','seem3.u95.log10','ber.med.aed50')] #56 rows
+
+```
+
+* As a group the silanes generally have caution on their AQC.
+* Presence of silanes in the low BER group is therefore maybe associated with more uncertainty.
+
+```{r,warning= FALSE}
+
+asnm.tier1.all.invivo[grep('silane',chnm),c('chnm','dsstox_substance_id','T0','T4','Call','aqc_iv_pass','aqc_indicator')]
+```
+
+
+## Prepare BER plotting
+
+```{r, warning=FALSE}
+asnm.tier1.all.plot <- melt.data.table(asnm.tier1.all.invivo,
+                                id.vars = c('dsstox_substance_id',
+                                            'chnm',
+                                            'CASRN',
+                                            'apcra.pro.only',
+                                            "ber.targeted", 
+                                            "ber.httr", 
+                                            "ber.htpp",
+                                            "ber.astar",
+                                            "ber.med.aed50",
+                                            "aqc_indicator"),
+                                measure.vars = c("log.repdose.any.5th",
+                                                 "aed50.atg", 
+                                                 "aed50.bsk", 
+                                                 "aed50.ccte", 
+                                                 "aed50.nvs", 
+                                                 "aed50.stm", 
+                                                 "aed50.httr.mcf7", 
+                                                 "aed50.httr.u2os", 
+                                                 "aed50.httr.heparg", 
+                                                 "aed50.htpp.u2os", 
+                                                 "aed50.astar.beas2b", 
+                                                 "aed50.astar.hepg2", 
+                                                 "aed50.astar.hek293", 
+                                                 "med.aed50", 
+                                                 "min.aed50", 
+                                                 "seem3.u95.log10", 
+                                                 "seem3.log10"),
+                                variable.name = 'types',
+                                value.name = 'values')
+
+asnm.tier1.all.plot <- asnm.tier1.all.plot[order(-ber.med.aed50)]
+
+```
+
+```{r, warning=FALSE, fig.width=9, fig.height=21, dpi=450}
+
+ber.all <- ggplot(data=asnm.tier1.all.plot[!is.na(ber.med.aed50)], 
+            aes(x=reorder(factor(chnm),-ber.med.aed50), 
+                y=values,
+                group = factor(types),
+                shape = factor(types), 
+                color = factor(types)))+
+  geom_point(size=3)+
+  scale_colour_viridis(discrete=TRUE,
+                       name = 'Values',
+                      breaks=c("log.repdose.any.5th", "aed50.atg", 
+"aed50.bsk", "aed50.ccte", "aed50.nvs", "aed50.stm", "aed50.httr.mcf7", 
+"aed50.httr.u2os", "aed50.httr.heparg", "aed50.htpp.u2os", "aed50.astar.beas2b", 
+"aed50.astar.hepg2", "aed50.astar.hek293", "seem3.u95.log10", "seem3.log10"),
+                      labels=c('5th%-ile POD All',
+                               'ATG AED50',
+                               'BSK AED50',
+                               'MEA AED50',
+                               'NVS AED50',
+                               'STM AED50',
+                               'HTTr MCF7 AED50',
+                               'HTTr U2OS AED50',
+                               'HTTr HepaRG AED50',
+                               'HTPP U2OS AED50',
+                               'ASTAR BEAS2B AED50',
+                               'ASTAR HepG2 AED50',
+                               'ASTAR HEK293 AED50',
+                               'SEEM3 U95',
+                               'SEEM MED'
+                            )) +
+  scale_shape_manual(name = 'Values',
+                     breaks=c("log.repdose.any.5th", "aed50.atg", 
+"aed50.bsk", "aed50.ccte", "aed50.nvs", "aed50.stm", "aed50.httr.mcf7", 
+"aed50.httr.u2os", "aed50.httr.heparg", "aed50.htpp.u2os", "aed50.astar.beas2b", 
+"aed50.astar.hepg2", "aed50.astar.hek293", "seem3.u95.log10", "seem3.log10"),
+                     values=c(15,16,17,18,8,9,15,16,17,18,8,9,15,16,17,18,8,9),
+                     labels=c('5th%-ile POD All',
+                               'ATG AED50',
+                               'BSK AED50',
+                               'MEA AED50',
+                               'NVS AED50',
+                              'STM AED50',
+                               'HTTr MCF7 AED50',
+                               'HTTr U2OS AED50',
+                               'HTTr HepaRG AED50',
+                               'HTPP U2OS AED50',
+                               'ASTAR BEAS2B AED50',
+                               'ASTAR HepG2 AED50',
+                               'ASTAR HEK293 AED50',
+                               'SEEM3 U95',
+                               'SEEM MED'))+
+  xlab('')+
+  #ylab('log10-mg/kg/day')+
+  theme_bw() +
+  theme(
+    #axis.text.x = element_text(angle=90, vjust=0.5),
+        axis.title.y = element_text(size=12, face='bold'),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        legend.position = 'bottom')+
+  scale_y_continuous(breaks=seq(-13,5,2))+
+  guides(colour=guide_legend(nrow=5))+
+      annotate("rect", 
+           ymin = -9, 
+           ymax = 7, 
+           xmin = 134, 
+           xmax = 190, 
+           fill = "red", 
+           alpha = 0.1, 
+           size = 1, 
+           color = "red")+
+    annotate("text",
+           x = 188,
+           y=-11,
+           label="A",
+           size=10,
+           hjust=0,
+           vjust=1)+
+  
+  coord_flip()
+#+
+#  theme(axis.text.y = element_text(colour=retro))
+
+
+ber.all
+```
+
+```{r, warning=FALSE, echo=FALSE, fig.width=9, fig.height=8, dpi=450}
+
+asnm.tier1.a <- asnm.tier1.all.plot[ber.med.aed50 <4 & apcra.pro.only==1]
+
+ber.complex <- ggplot(data=asnm.tier1.a[types %in% c("log.repdose.any.5th", "aed50.atg", 
+"aed50.bsk", "aed50.ccte", "aed50.nvs", "aed50.stm", "aed50.httr.mcf7", 
+"aed50.httr.u2os", "aed50.httr.heparg", "aed50.htpp.u2os", "aed50.astar.beas2b", 
+"aed50.astar.hepg2", "aed50.astar.hek293", "seem3.u95.log10")], 
+            aes(x=reorder(factor(chnm),-ber.med.aed50), 
+                y=values,
+                group = factor(types),
+                shape = factor(types), 
+                color = factor(types)))+
+  geom_point(size=3)+
+  scale_colour_viridis(discrete=TRUE,
+                       name = 'Values',
+                      breaks=c("log.repdose.any.5th", "aed50.atg", 
+"aed50.bsk", "aed50.ccte", "aed50.nvs", "aed50.stm", "aed50.httr.mcf7", 
+"aed50.httr.u2os", "aed50.httr.heparg", "aed50.htpp.u2os", "aed50.astar.beas2b", 
+"aed50.astar.hepg2", "aed50.astar.hek293", "seem3.u95.log10"),
+                      labels=c('5th%-ile POD All',
+                               'ATG AED50',
+                               'BSK AED50',
+                               'MEA AED50',
+                               'NVS AED50',
+                               'STM AED50',
+                               'HTTr MCF7 AED50',
+                               'HTTr U2OS AED50',
+                               'HTTr HepaRG AED50',
+                               'HTPP U2OS AED50',
+                               'ASTAR BEAS2B AED50',
+                               'ASTAR HepG2 AED50',
+                               'ASTAR HEK293 AED50',
+                               'SEEM3 U95'
+                            )) +
+  scale_shape_manual(name = 'Values',
+                     breaks=c("log.repdose.any.5th", "aed50.atg", 
+"aed50.bsk", "aed50.ccte", "aed50.nvs", "aed50.stm", "aed50.httr.mcf7", 
+"aed50.httr.u2os", "aed50.httr.heparg", "aed50.htpp.u2os", "aed50.astar.beas2b", 
+"aed50.astar.hepg2", "aed50.astar.hek293", "seem3.u95.log10"),
+                     values=c(15,16,17,18,8,9,15,16,17,18,8,9,15,16,17,18,8),
+                     labels=c('5th%-ile POD All',
+                               'ATG AED50',
+                               'BSK AED50',
+                               'MEA AED50',
+                               'NVS AED50',
+                              'STM AED50',
+                               'HTTr MCF7 AED50',
+                               'HTTr U2OS AED50',
+                               'HTTr HepaRG AED50',
+                               'HTPP U2OS AED50',
+                               'ASTAR BEAS2B AED50',
+                               'ASTAR HepG2 AED50',
+                               'ASTAR HEK293 AED50',
+                              'SEEM3 U95'
+))+
+  xlab('')+
+  #ylab('log10-mg/kg/day')+
+  theme_bw() +
+  theme(
+    #axis.text.x = element_text(angle=90, vjust=0.5),
+        axis.title.y = element_text(size=12, face='bold'),
+        axis.text.y=element_text(size=10),
+        axis.title.x = element_blank(),
+        legend.position = 'bottom')+
+  scale_y_continuous(breaks=seq(-13,5,1))+
+  guides(colour=guide_legend(nrow=5))+
+  annotate("text",
+           x = 56,
+           y=-6,
+           label="B",
+           size=10,
+           hjust=0,
+           vjust=1)+
+  coord_flip()
+
+ber.complex
+```
+
+* Reduce complexity
+
+```{r, warning=FALSE, fig.width=8, fig.height=8, dpi=450}
+
+asnm.tier1.b <- asnm.tier1.all.plot[ber.med.aed50 <4 & aqc_indicator==1 & apcra.pro.only==1]
+#unique(asnm.tier1.b$dsstox_substance_id) #13 substances
+#retro <- ifelse(asnm.tier1.a$apcra.ret==1, "red","black")
+#retro.face <- ifelse(asnm.tier1.a$apcra.ret==1, "italic","plain")
+
+ber.simple <- ggplot(data=asnm.tier1.b[ types %in% c("log.repdose.any.5th", 
+                                                                                              "med.aed50",
+                                                                                              "seem3.log10",
+                                                                                              "seem3.u95.log10")], 
+            aes(x=reorder(factor(chnm),-ber.med.aed50), 
+                y=values,
+                group = factor(types),
+                shape = factor(types), 
+                color = factor(types)))+
+  geom_point(size=3)+
+  scale_colour_manual(values=c('#481567FF',
+                               '#2D708EFF',
+                               '#3CBB75FF',
+                               '#95D840FF'),
+                       name = 'Values',
+                      breaks=c("log.repdose.any.5th", 
+                               "med.aed50",
+                               "seem3.u95.log10", 
+                               "seem3.log10"),
+                      labels=c('5th%-ile POD All',
+                               "Med AED50",
+                               "SEEM3 U95",
+                               "SEEM3"
+                            )) +
+  scale_shape_manual(name = 'Values',
+                     breaks=c("log.repdose.any.pod", 
+                               "med.aed50",
+                               "seem3.u95.log10", 
+                               "seem3.log10"),
+                      labels=c('5th%-ile POD All',
+                               "Med AED50",
+                               "SEEM3 U95",
+                               "SEEM3"),
+                     values=c(15,16,17,18))+
+  xlab('')+
+  #ylab('log10-mg/kg/day')+
+  theme_bw() +
+  theme(
+    #axis.text.x = element_text(angle=90, vjust=0.5),
+        axis.text = element_text(size=10),
+        axis.title.y=element_text(size=14,face='bold'),
+        axis.title.x = element_blank(),
+        legend.position = 'bottom')+
+  scale_y_continuous(breaks=seq(-9,5,2))+
+  guides(colour=guide_legend(nrow=2))+
+  annotate("text",
+           x = 43,
+           y=-8,
+           label="C",
+           size=10,
+           hjust=0,
+           vjust=1)+
+  coord_flip()
+  #theme(axis.text.y = element_text(colour=retro, face=retro.face))
+
+  
+ber.simple
+
+```
+```{r, warning=FALSE, fig.height=9, fig.width=9}
+
+
+bplusc <- plot_grid(ber.complex, ber.simple, rel_heights = c(1,1), rel_widths = c(1,1), nrow=2)
+
+```
+
+```{r, warning=FALSE, fig.width=18, fig.height=18}
+
+
+plot_grid(ber.all, bplusc, rel_widths = c(1,1), rel_heights = c(1,1), ncol=2)
+
+
+```
+
+```{r, warning=FALSE}
+
+layout <- matrix(c(1,1,2,2,2,
+                   1,1,2,2,2,
+                   1,1,3,3,3,
+                   1,1,3,3,3), nrow=4, byrow=TRUE)
+
+# multiplot was obtained from
+# http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_%28ggplot2%29/
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  require(grid)
+  
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+file.dir <- paste("./output", sep="")
+file.name <- paste("/Figure_BER_", Sys.Date(), ".png", sep="")
+file.path <- paste(file.dir, file.name, sep="")
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+png(file.path, width = 10000, height = 9000, res=600)
+multiplot(ber.all, ber.complex, ber.simple, layout = layout)
+dev.off()
+
+```
+
+```{r, warning=FALSE}
+Table1redo <- asnm.tier1.all.invivo[ber.med.aed50< 4 & apcra.pro.only==1 & is.na(log.repdose.any.25th) & aqc_indicator==1, c('dsstox_substance_id','preferred_name','ber.med.aed50', 'log.repdose.any.25th','med.aed50', 'seem3.u95.log10', 'seem3.log10')]
+Table1redo <- Table1redo %>% mutate_if(is.numeric, ~round(., 2))
+Table1redo
+```
+
+```{r, warning=FALSE}
+Table2redo <- asnm.tier1.all.invivo[ber.med.aed50 > 3 & med.aed50 > 2 & pod.ratio > -0.5 & aqc_indicator==1, c('dsstox_substance_id','preferred_name','log.repdose.any.5th', 'med.aed50', 'ber.med.aed50', 'pod.ratio', 'aqc_indicator')]
+
+Table2redo <- Table2redo %>% mutate_if(is.numeric, ~round(., 2))
+Table2redo
+
+```
+```{r, warning=FALSE, eval=FALSE}
+
+redo_tables <- list('Table1_HighPriorityChems' = as.data.frame(Table1redo),
+                    'Table2_LowPriorityChems' = as.data.frame(Table2redo))
+
+
+write.xlsx(redo_tables, './output/Draft_Table1_Table2_APCRA_Pro_27May2024.xlsx')
+
+```
+
+## Compare HepaRG POD to other POD
+
+```{r, warning=FALSE}
+
+heparg.comp <- asnm.tier1.all.invivo[,c('dsstox_substance_id',
+                                        'aed50.httr.heparg',
+                                        'aed50.httr.u2os',
+                                        'aed50.httr.mcf7',
+                                        'med.aed50',
+                                        'min.aed50',
+                                        'p5.toxval.numeric',
+                                        'p25.toxval.numeric'
+                                        )]
+heparg.comp[, httr.min.aed50.nonheparg := min(aed50.httr.heparg,aed50.httr.mcf7, na.rm = TRUE), by=c('dsstox_substance_id')]
+heparg.comp[, httr.heparg.diff := ifelse(!is.na(httr.min.aed50.nonheparg), httr.min.aed50.nonheparg - aed50.httr.heparg, NA), by=c('dsstox_substance_id')]
+
+range(heparg.comp$httr.heparg.diff, na.rm=TRUE) #-3.2 to 0
+hist(heparg.comp$httr.heparg.diff, na.rm=TRUE)
+```
+
+```{r, warning=FALSE}
+heparg.comp.long <- melt.data.table(heparg.comp,
+                                    id.vars = c('dsstox_substance_id',
+                                                'aed50.httr.heparg'),
+                                    measure.vars = c('httr.min.aed50.nonheparg',
+                                                     'med.aed50',
+                                                     'p5.toxval.numeric',
+                                                     'p25.toxval.numeric'),
+                                    variable.name = c('POD'),
+                                    value.name = c('value'))
+```
+
+```{r, warning=FALSE}
+heparg.httr <- ggplot(data=heparg.comp.long, 
+                 aes(x=aed50.httr.heparg, 
+                     y=value))+
+  geom_point(aes(x=aed50.httr.heparg, 
+                 y=value), alpha=0.5, size=2)+
+  coord_cartesian(xlim=c(-4,6), ylim=c(-4,6))+
+  theme_bw()+
+  geom_abline(color='black')+
+  geom_abline(intercept = 0.5, slope = 1, color="dark gray", 
+                 linetype="dashed", size=0.75)+
+  geom_abline(intercept = -0.5, slope = 1, color="dark gray", 
+                 linetype="dashed", size=0.75)+
+  xlab('HepaRG HTTr AED50, log10-mg/kg/day')+
+  ylab('POD value, log10-mg/kg/day')+
+   theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14))+
+  facet_wrap(~POD, scales='fixed')+
+  theme(strip.background = element_rect(fill='white',size=1),
+        strip.text = element_text(size=10, color='black',face='bold'))
+
+heparg.httr
+
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+file.dir <- paste("./output", sep="")
+file.name <- paste("/Figure_HepaRG_", Sys.Date(), ".png", sep="")
+file.path <- paste(file.dir, file.name, sep="")
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+png(file.path, width = 4000, height = 4000, res=600)
+heparg.httr
+dev.off()
+
+
+
+```
+
+## SEEM Credible Interval Size vs BER
+
+```{r, warning=FALSE}
+
+ber.v.seem <- asnm.tier1.all.invivo[,c('dsstox_substance_id','ber.med.aed50', 'seem3.u95.log10','seem3.log10', 'med.aed50')]
+ber.v.seem[ ,cred.int.size := seem3.u95.log10 - seem3.log10]
+
+
+ber_seem <- ggplot(data=ber.v.seem, 
+                 aes(x=cred.int.size, 
+                     y=ber.med.aed50))+
+  geom_point(aes(x=cred.int.size, 
+                     y=ber.med.aed50), alpha=0.5, size=2)+
+  #coord_cartesian(xlim=c(-4,6), ylim=c(-4,6))+
+  theme_bw()+
+  geom_smooth(method='lm',se=FALSE,color='blue',formula=y~x)+
+  stat_poly_eq(formula=y ~x,
+               eq.with.lhs = "y~`=`~",
+               aes(label=paste0("atop(", ..eq.label.., ",", ..rr.label.., ")")),
+               label.x.npc = 0.8,
+               label.y.npc = 0.8,
+               parse=TRUE)+
+  xlab('SEEM3 U95 - SEEM3 Median, log10-mg/kg/day')+
+  ylab('BER')+
+   theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14))
+ber_seem
+
+```
+```{r, warning=FALSE}
+file.dir <- paste("./output", sep="")
+file.name <- paste("/Figure_BER_v_SEEMCredInt_", Sys.Date(), ".png", sep="")
+file.path <- paste(file.dir, file.name, sep="")
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+png(file.path, width = 4000, height = 4000, res=600)
+ber_seem
+dev.off()
+
+
+
+```
+# Developmental and reproductive toxicity (DART) {.tabset .tabset-fade .tabset-pills}
+
+Dev tox flag will be added to the ER/AR flags as a set for DART prediction flag. The dev tox flag consists of Stemina devTox quick-Predict data and an in silico flag from TEST.
+
+## Reference chemicals for developmental toxicity
+
+Using Zurlinden et al 2019 for reference chemicals.
+Can see that the devtox TEST prediction is not necessarily accurate.
+
+```{r load-dev-refchem, warning=FALSE}
+
+devref <- fread('./source/in_vitro/devtox_reference_zurlinden_2019.csv')
+devref <- devref[-26,]
+devref[1:17, ref:= 'TP']
+devref[18:26, ref:= 'FN']
+devref[27:42, ref:= 'TN']
+devref[,c('DTXSID','PREFERRED_NAME','ref','DEVTOX_TEST_PRED')]
+
+```
+What is the overlap with APCRA 201 substances?
+Seemingly only one true positive...and not one captured by Stemina (PTU).
+
+```{r, warning=FALSE}
+devref[DTXSID %in% apcra.list$DTXSID]
+```
+ 
+Load mc5 for some positive reference chemicals for DART overall (dev, ER, AR)
+
+```{r, warning=FALSE}
+
+dart.ref <- c(
+'DTXSID5022308', #genistein
+'DTXSID3020465', #diethylstilbestrol
+'DTXSID7020182', #bisphenol a
+'DTXSID7032004', #flutamide
+'DTXSID4022361', #vinclozolin
+'DTXSID7021239', #retinoic acid
+'DTXSID9022524', #thalidomide
+'DTXSID2020634', #5-fluorouracil
+'DTXSID6025438', #hydroxyurea
+'DTXSID1020194'  #boric acid
+)
+
+```
+
+Here we pull the DART reference chemical mc5 for Stemina from invitrodb v3.5.
+```{r, eval=FALSE, echo=FALSE,warning=FALSE}
+tcplConf(user='_dataminer', pass='pass', db='prod_internal_invitrodb_v3_5', drvr='MySQL', host='ccte-mysql-res.epa.gov')
+```
+
+```{r, warning=FALSE, eval=FALSE}
+dart.mc5 <- tcplPrepOtpt(tcplLoadData(lvl=5, type='mc',fld='aeid', val=c(1691,1858)))
+dart.mc5 <- dart.mc5[dsstox_substance_id %in% dart.ref]
+```
+
+## Add dev datasets
+
+* 61 APCRA substances were screened in multi-conc in Stemina (STM).
+* An additional 5 substances appeared positive in the single-conc screen but were not re-screened; as such a positive is inferred at the concentration screened in single conc (100 uM).
+ 
+```{r, eval=FALSE, warning=FALSE}
+stm <- mega.mc5[asnm=='STM']
+#length(unique(stm$dsstox_substance_id)) #66
+stm.mc.dtxsids <- unique(stm$dsstox_substance_id) # 6 of these were added as positives from sc that never advanced to mc (from previous processing)
+
+#stm[hitc==1 & is.na(modl_tp)]
+#added.dtxsid <- stm[is.na(modl_prob), dsstox_substance_id]
+#stm[dsstox_substance_id %in% added.dtxsid, modl_acc := 2]
+#stm[dsstox_substance_id %in% added.dtxsid, acc_uM := 100]
+
+```
+
+* Reshape the multi-conc data.
+
+```{r, eval=FALSE, warning=FALSE}
+# cast data to combine them.
+
+mc5.stm.wide <- dcast.data.table(stm[aeid %in% c(1691,1858)], dsstox_substance_id + chnm ~ aenm,
+                                  value.var = 'modl_acc',
+                                  fun.aggregate= min)
+
+mc5.dartref.wide <- dcast.data.table(dart.mc5[aeid %in% c(1691,1858)], dsstox_substance_id + chnm ~ aenm,
+                                  value.var = 'modl_acc',
+                                  fun.aggregate= min)
+
+mc5.stm.wide <- rbind(mc5.stm.wide,
+                      mc5.dartref.wide)
+```
+
+* Negatives need to be inferred for the single conc screened substances that were negative.
+* 133 chemicals with single conc screening data from the APCRA list.
+
+```{r, eval=FALSE, warning=FALSE}
+
+add.wide <- dcast.data.table(sc2.stm[aeid==1691 & !dsstox_substance_id %in% stm.mc.dtxsids & hitc==0], dsstox_substance_id + chnm ~aenm,
+                             value.var='hitc',
+                             fun.aggregate=max)
+
+add.wide[,STM_H9_Viability_norm := NA]
+
+#length(unique(add.wide$dsstox_substance_id)) #133
+```
+
+## Calculate dev flag
+
+* Calculate the DEV flag.
+* Any hit in STM_H9_OrnCyssISnorm_ratio_dn considered relevant as a DEV flag.
+* Hits where the distance from the parallel viability assay is more then 0.25 log are considered selective flags.
+
+```{r, eval=FALSE, warning=FALSE}
+
+dev.flag <- rbind(mc5.stm.wide,
+                  add.wide, fill=TRUE)
+
+dev.flag[,stm.cyto.dist := ifelse(!is.na(STM_H9_Viability_norm), STM_H9_Viability_norm - STM_H9_OrnCyssISnorm_ratio_dn, 3 - STM_H9_OrnCyssISnorm_ratio_dn)]
+
+dev.flag[,dev.flag := 0]
+dev.flag[!is.na(STM_H9_OrnCyssISnorm_ratio_dn), dev.flag := 1]
+dev.flag[,dev.flag.specific := 0]
+dev.flag[stm.cyto.dist >0.25, dev.flag.specific := 1]
+```
+
+Add TEST DEV TOX prediction and the applicability domain.
+
+```{r, eval=FALSE, warning=FALSE}
+load('./source/chem/apcra_chem_ad.RData')
+setnames(test.opera.pred.total, c('DTXSID','PREFERRED_NAME'), c('dsstox_substance_id','chnm'), skip_absent = TRUE)
+dev.flag$test.devtox.score <- test.opera.pred.total$DEVTOX_TEST_PRED[match(dev.flag$dsstox_substance_id,
+                                                               test.opera.pred.total$dsstox_substance_id)]
+
+# replace Inf with NA
+for (j in 1:ncol(dev.flag)) set(dev.flag, which(is.infinite(dev.flag[[j]])), j, NA)
+# replace - with NA
+dev.flag[,c('test.devtox.score')] <- lapply(dev.flag[,c('test.devtox.score')], function(col) as.numeric(gsub("-$|\\,",NA, col)))
+dev.flag$aqc_indicator <- ad.tbl$aqc_indicator[match(dev.flag$dsstox_substance_id, ad.tbl$DTXSID)]
+dev.flag$apcra.pro.only <- ad.tbl$apcra.pro.only[match(dev.flag$dsstox_substance_id, ad.tbl$DTXSID)]
+```
+
+## Create Endocrine Hazard Flags
+* Match the logic in the recent comments provided to the EPA program office partners on a prioritization and screening workflow using ER and AR models.
+  + If ToxCast ER/AR pathway models available: these scores trump CERAPP and COMPARA.
+  + ToxCast ER/AR pathway model positives: => 0.1
+  + Grouped equivocals (0.001-0.1) with the negative to enable easier prioritization.
+  + For ToxCast AR pathway model (older version to match what is in invitrodb version 3.3 and CompTox Chemicals Dashboard), require confidence flags to be > 2 for a positive.
+  + Highlight substances with no data - could be a data gap?
+
+```{r, eval=FALSE, warning=FALSE}
+
+total.endo.dtxsid <- c(apcra.list$DTXSID, dart.ref)
+
+## here we should really get the dtxsids for cerapp...
+
+cerapp.compara <- merge.data.table(cerapp[,c('CASRN','CHEMICAL_NAME','input_SMILES','InChI_Key',
+                                                'Potency_class_2_binding', 'Potency_class_2_agonist', 'Potency_class_2_antagonist','consensus_2_binding', 'consensus_2_agonist','consensus_2_antagonist')],
+                                by.x = 'CASRN',
+                                all.x=TRUE,
+                                compara[, c('dsstox_substance_id','casrn','consensus_binding', 'consensus_agonist','consensus_antagonist')],
+                                by.y='casrn',
+                                all.y=TRUE)
+
+colnames(er) <- paste0('er_model_', colnames(er))
+er.cerapp.compara <- merge.data.table(cerapp.compara,
+                                er,
+                                by.x='CASRN',
+                                by.y='er_model_CASRN',
+                                all.x=TRUE)
+
+colnames(ar) <- paste0('ar_model_', colnames(ar))
+er.ar.cerapp.compara <- merge.data.table(er.cerapp.compara,
+                                ar,
+                                by.x='CASRN',
+                                by.y='ar_model_CASRN',
+                                all.x=TRUE)
+
+```
+
+```{r erarflg-tbl, eval=FALSE, warning=FALSE}
+
+er.ar.apcra <- er.ar.cerapp.compara[dsstox_substance_id %in% total.endo.dtxsid]
+
+col.num <- c('consensus_2_binding', 'consensus_2_agonist', 'consensus_2_antagonist')
+er.ar.apcra[, (col.num) := lapply (.SD, as.numeric), .SDcols = col.num ]
+# indicate any active result from compara consensus qsar
+er.ar.apcra[is.na(consensus_binding & consensus_agonist & consensus_antagonist),compara.flag := 2] # if data not available
+er.ar.apcra[consensus_binding==0 & consensus_agonist==0 & consensus_antagonist==0, compara.flag := 0] # if data are all negative
+er.ar.apcra[consensus_binding==1|consensus_agonist==1|consensus_antagonist==1, compara.flag := 1] # if any mode is positive
+
+# indicate any active result from cerapp consensus qsar
+er.ar.apcra[is.na(consensus_2_agonist & consensus_2_binding & consensus_2_antagonist),cerapp.flag := 2]
+er.ar.apcra[consensus_2_agonist==0 & consensus_2_binding==0 & consensus_2_antagonist==0, cerapp.flag := 0]
+er.ar.apcra[consensus_2_agonist==1|consensus_2_binding==1|consensus_2_antagonist==1, cerapp.flag := 1]
+
+# create positive, equivocal, and negative code on ToxCast AR model
+er.ar.apcra[is.na(ar_model_Agonist_AUC & ar_model_Antagonist_AUC), toxcast.ar.flag := 2] # data not available
+er.ar.apcra[ar_model_Agonist_AUC < 0.1 & ar_model_Antagonist_AUC < 0.1|ar_model_Antagonist_AUC > 0.1 & ar_model_Antagonist_Confidence_Score <= 2, toxcast.ar.flag := 0] # grouped equivocals into the negative space
+er.ar.apcra[ar_model_Agonist_AUC >= 0.1|ar_model_Antagonist_AUC >= 0.1 & ar_model_Antagonist_Confidence_Score >2, 
+            toxcast.ar.flag := 1]
+
+# create positive, equivocal, and negative code on ToxCast ER model
+er.ar.apcra[is.na(er_model_Agonist_AUC & er_model_Antagonist_AUC), toxcast.er.flag := 2] # no data available
+er.ar.apcra[er_model_Agonist_AUC< 0.1 & er_model_Antagonist_AUC < 0.1, toxcast.er.flag := 0] # grouped equivocals into the negative space
+er.ar.apcra[er_model_Agonist_AUC >= 0.1|er_model_Antagonist_AUC >= 0.1, toxcast.er.flag := 1]
+
+# require toxcast er model data to trump cerapp call
+er.ar.apcra[toxcast.er.flag ==2 & cerapp.flag==2, final.er.flag :=0.1] # no data
+er.ar.apcra[toxcast.er.flag ==2 & cerapp.flag==0, final.er.flag :=0] # only cerapp data and it's negative
+er.ar.apcra[toxcast.er.flag ==2 & cerapp.flag==1, final.er.flag :=0.5] # only cerapp data and it's positive
+er.ar.apcra[toxcast.er.flag ==0 & cerapp.flag %in% c(0,1,2), final.er.flag := 0] # er model available and negative
+er.ar.apcra[toxcast.er.flag ==1 & cerapp.flag %in% c(0,1,2), final.er.flag := 1] # er model available and positive
+
+# require toxcast ar model data to trump compara call
+er.ar.apcra[toxcast.ar.flag ==2 & compara.flag==2, final.ar.flag :=0.1] # no data
+er.ar.apcra[toxcast.ar.flag ==2 & compara.flag==0, final.ar.flag :=0] # only cerapp data and it's negative
+er.ar.apcra[toxcast.ar.flag ==2 & compara.flag==1, final.ar.flag :=0.5] # only cerapp data and it's positive
+er.ar.apcra[toxcast.ar.flag ==0 & compara.flag %in% c(0,1,2), final.ar.flag := 0] # er model available and negative
+er.ar.apcra[toxcast.ar.flag ==1 & compara.flag %in% c(0,1,2), final.ar.flag := 1] # er model available and positive
+
+
+er.ar.apcra[, ed.flag.sum := sum(final.er.flag, final.ar.flag), by=list(dsstox_substance_id)]
+
+```
+
+```{r deprecated-long-erartbl, eval=FALSE, echo=FALSE, warning=FALSE}
+
+er.ar.apcra.long <- melt.data.table(er.ar.apcra,
+                           id.vars = c('DTXSID', 'CASRN','preferred_name', 'ed.flag.sum',
+                                       'er_model_pseudo_AC50_median','er_model_pseudo_AC50_min','er_model_Agonist_AUC',
+                                       'er_model_Antagonist_AUC',
+                                       'ar_model_pseudo_AC50_median','ar_model_pseudo_AC50_min',
+                                       'ar_model_Agonist_AUC','ar_model_Antagonist_AUC'),
+                           measure.vars = c('cerapp.flag',
+                                            'compara.flag',
+                                            'toxcast.er.flag',
+                                            'toxcast.ar.flag',
+                                            'final.ar.flag',
+                                            'final.er.flag'),
+                          variable.name = 'flags',
+                          value.name = 'flag.values')
+
+
+
+#er.ar.apcra.long2 <- melt.data.table(er.ar.apcra.long,
+#                                     id.vars = c('DTXSID','CASRN','preferred_name','ed.flag.sum'),
+#                                     measure.vars = c('er_model_pseudo_AC50_median', 'er_model_pseudo_AC50_min',
+#                                                      'er_model_Agonist_AUC','er_model_Antagonist_AUC',
+#                                       'ar_model_pseudo_AC50_median','ar_model_pseudo_AC50_min',
+#                                       'ar_model_Agonist_AUC','ar_model_Antagonist_AUC'),
+#                                     variable.name = 'toxcast_models',
+#                                     value.name = 'toxcast_model_values')
+
+er.ar.apcra.long <- er.ar.apcra.long[order(-ed.flag.sum)]
+
+
+#er.ar.apcra.long2 <- unique(er.ar.apcra.long2) # this is for potency values. Maybe return to this later.
+```
+
+```{r, eval=FALSE, warning=FALSE}
+
+er.ar.flag <- er.ar.apcra[,c("dsstox_substance_id","compara.flag","cerapp.flag","toxcast.ar.flag","toxcast.er.flag","final.er.flag",                          "final.ar.flag","ed.flag.sum")]
+
+```
+
+## DART flag
+
+```{r, warning=FALSE}
+
+load('./output/APCRA_haz_flg_BER.RData')
+
+```
+
+
+```{r dart-flag-prep-fig, warning=FALSE, eval=FALSE}
+
+# add minimum NAM column for comparison
+dev.flag$min_nam <- asnm.tier1$col_min[match(dev.flag$dsstox_substance_id,
+                                     asnm.tier1$dsstox_substance_id)]
+dev.flag[min_nam=='CCTE', min_nam := 'MEA'] # the CCTE vendor is for the acute MEA data from Shafer lab
+
+# define the binary flag for the TEST dev model
+dev.flag[test.devtox.score > 0.7, dev.test := 0.5]
+dev.flag[test.devtox.score < 0.7, dev.test := 0]
+
+# merge dev and ER/AR flag
+dart.flag <- merge.data.table(dev.flag,
+                              er.ar.flag,
+                              by=c('dsstox_substance_id'),
+                              all.x=TRUE,
+                              all.y=TRUE)
+
+# make sure chnm is not missing
+setnames(apcra.total, 'DTXSID', 'dsstox_substance_id')
+setnames(apcra.total, 'preferred_name', 'chnm')
+dart.flag.na <- dart.flag[is.na(chnm)]
+dart.flag$chnm <- apcra.total$chnm[match(dart.flag$dsstox_substance_id,
+                                            apcra.total$dsstox_substance_id)]
+dart.flag$chnm_dev <- dev.flag$chnm[match(dart.flag$dsstox_substance_id,
+                                          dev.flag$dsstox_substance_id)]
+dart.flag[is.na(chnm), chnm := chnm_dev]
+dart.flag[,c('chnm_dev') := NULL]
+
+# add BER
+dart.flag$ber.med.aed50 <- asnm.tier1.all.invivo$ber.med.aed50[match(dart.flag$dsstox_substance_id,
+                                                                     asnm.tier1.all.invivo$dsstox_substance_id)]
+
+dart.flag <- dart.flag[order(ber.med.aed50)]
+```
+
+
+```{r, warning=FALSE}
+# further refine columns of data available
+dart_mat <- dart.flag[apcra.pro.only==1]
+dart_mat <- dart_mat[aqc_indicator==1]
+dart_mat <- dart_mat[ber.med.aed50 < 4 ]
+dart_ref_mat <- unique(dart.flag[dsstox_substance_id %in% dart.ref])
+dart_ref_mat$chnm <- dev.flag$chnm[match(dart_ref_mat$dsstox_substance_id,
+                                         dev.flag$dsstox_substance_id)]
+
+setnames(dart_mat, c('dev.test',
+                                       'dev.flag',
+                                       'dev.flag.specific',
+                                       'final.er.flag',
+                                       'final.ar.flag'),
+         c('DEV-TEST','DEV','DEV-S','ER','AR'))
+setnames(dart_ref_mat, c('dev.test',
+                                       'dev.flag',
+                                       'dev.flag.specific',
+                                       'final.er.flag',
+                                       'final.ar.flag'),
+         c('DEV-TEST','DEV','DEV-S','ER','AR'))
+
+# comprise the main matrices
+dart_mat2 <- as.matrix(dart_mat[,c('DEV-TEST','DEV','DEV-S','ER','AR')])
+rownames(dart_mat2) <- dart_mat[, chnm] # define rownames as chemical name
+
+dart_ref2 <- as.matrix(dart_ref_mat[,c('DEV-TEST','DEV','DEV-S','ER','AR')])
+rownames(dart_ref2) <- dart_ref_mat[, chnm] # define rownames as chemical name
+
+head(dart_ref2)
+```
+
+```{r dart-ha, warning=FALSE}
+
+# annotations for main hm
+anno_df <- data.frame(rownames(dart_mat2))
+anno_df$min_nam <- dart.flag$min_nam[match(anno_df[,1],
+                                            dart.flag$chnm)]
+anno_df$chnm <- dart.flag$chnm[match(anno_df[,1],
+                                      dart.flag$chnm)]
+anno_df$ber <- dart.flag$ber.med.aed50[match(anno_df[,1],
+                                             dart.flag$chnm)]
+
+#left_ha <- rowAnnotation(min_nam = anno_text(anno_df$min_nam,
+#                                            just='right',
+#                                            location=1,
+#                                            show_name = FALSE))
+right_ha <- rowAnnotation(BER = anno_barplot(anno_df$ber, width = unit(4,'cm')))
+
+# annotations for ref hm
+anno_ref <- data.frame(rownames(dart_ref2))
+anno_ref$chnm <- dart.flag$chnm[match(anno_ref[,1],
+                                      dart.flag$chnm)]
+```
+
+```{r, warning=FALSE}
+hm_dart <- Heatmap(matrix = dart_mat2, 
+                       cluster_columns = FALSE,
+                       cluster_rows=FALSE,
+                       name="log10-mg/kg/day",
+                       #col=col_fun,
+                       na_col='gray',
+                       #col= colors,
+                       col = colorRamp2(breaks = c(0, 0.5, 1),
+                                         colors = c("white" , "#3CBB75FF", "#440154FF")),
+                       #col = list(type=c("1" = "#2166ac","0"= "#f7f7f7")),
+                       show_row_names = TRUE, 
+                       row_dend_width = unit(3, "cm"),
+                       column_names_max_height = unit(8, "cm"),
+                       column_names_gp = gpar(fontsize = 12),
+                       heatmap_legend_param = list(title = "In silico/In vitro",legend_direction = 'horizontal'),
+                       width=unit(6,'cm'),
+                       height = unit(14, 'cm'),
+                       rect_gp = gpar(col = "gray", lwd = 2),
+                       column_names_side='top',
+                       #left_annotation = left_ha,
+                       right_annotation = right_ha,
+                   row_names_gp=gpar(fontsize=10,fontfamily='sans'))
+
+hm_dart_ref <- Heatmap(matrix = dart_ref2, 
+                       cluster_columns = FALSE,
+                       cluster_rows=FALSE,
+                       name="log10-mg/kg/day",
+                       #col=col_fun,
+                       na_col='gray',
+                       #col= colors,
+                       col = colorRamp2(breaks = c(0, 0.5, 1),
+                                         colors = c("white" , "#3CBB75FF", "#440154FF")),
+                       #col = list(type=c("1" = "#2166ac","0"= "#f7f7f7")),
+                       show_row_names = TRUE, 
+                       #row_dend_width = unit(3, "cm"),
+                       #column_names_max_height = unit(8, "cm"),
+                       column_names_gp = gpar(fontsize = 12),
+                       heatmap_legend_param = list(title = "In silico/In vitro",legend_direction = 'horizontal'),
+                       #width=unit(6,'cm'),
+                       height = unit(4, 'cm'),
+                       rect_gp = gpar(col = "gray", lwd = 2),
+                       column_names_side='top',
+                   row_names_gp=gpar(fontsize=10,fontfamily='sans'))
+
+```
+
+```{r, warning=FALSE, fig.height=11, fig.width=12}
+
+hm.ed <- draw(hm_dart %v%  hm_dart_ref, 
+              heatmap_legend_side='bottom',
+              ht_gap = unit(1, "cm"))
+```
+```{r, warning=FALSE}
+file.dir <- paste("./output", sep="")
+file.name <- paste("/Figure_DART_HM_", Sys.Date(), ".png", sep="")
+file.path <- paste(file.dir, file.name, sep="")
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+png(file.path, width = 4000, height = 5000, res=450)
+hm.ed
+dev.off()
+
+```
+
+# BSK data {.tabset .tabset-fade .tabset-pills}
+
+The BSK data, or BioMAP panel as it is now known, contain endpoints potentially relevant to immunosuppression.
+We need to annotate the specific endpoints to calculate the potency of potential immunosuppression and the potency of potential "acute toxicity" (or really, cytotoxicity) in these pathophysiological systems.
+
+## Annotate the BSK assay endpoints
+
+```{r bsk-annotate, warning=FALSE}
+
+bsk.aeid <- unique(mega.mc5[asnm=='BSK',c('aeid','aenm')])
+bsk.aeid[,cells := tstrsplit(aenm, "_", fixed=TRUE, keep=c(2))]
+bsk.aeid[,endpoint := tstrsplit(aenm, "_", fixed=TRUE, keep=c(3))]
+bsk.aeid[,direction := tstrsplit(aenm, "_", fixed=TRUE, keep=c(4))]
+
+## label signature activity groups
+bsk.aeid[,activity := as.character(NA)]
+bsk.aeid[grep('SRB_down', aenm),activity := 'cytotoxicity']
+bsk.aeid[grep('_3C_Proliferation_down',aenm), activity := 'liver toxicity'] #endothelial cell signal
+bsk.aeid[grep('SAg_Proliferation_down',aenm), activity := 'immunosuppression'] # decreased T-cells
+bsk.aeid[grep('BT_sIgG_down', aenm), activity := 'immunosuppression'] # decreased IgG
+bsk.aeid[grep('BT_Bcell_Proliferation_down',aenm), activity := 'immunosuppression'] # decreased B cell proliferation
+bsk.aeid[grep('PBMCCytotoxicity_down', aenm), activity := 'immunosuppression'] #cytotoxic to peripheral blood mononuclear cells
+bsk.aeid[grep('3C_Thrombomodulin_up', aenm), activity := 'thrombosis'] 
+
+# next systems are at 'non-cytotoxic concentrations'
+bsk.aeid[grep('LPS_PGE2_up', aenm), activity := 'skin irritation']
+bsk.aeid[grep('LPS_TNFa_up', aenm), activity := 'skin irritation']
+bsk.aeid[grep('hDFCGF_CollagenIII_down', aenm), activity := 'skin sensitization']
+bsk.aeid[grep('hDFCGF_VCAM1_up', aenm), activity := 'skin rash']
+bsk.aeid[grep('CASM3C_SAA_up', aenm), activity := 'vascular toxicity']
+bsk.aeid[aenm=='BSK_IMphg_IL10_down', activity := 'immunosuppression']
+
+kable(bsk.aeid[activity %in% c('immunosuppression','skin irritation','skin rash','skin sensitization')])
+```
+
+## Load positive controls for immunosuppression
+
+In the BioMAP (BSK) panel, we also ran immunosuppressive drugs as controls. We can use these as reference chemicals, but they are not in the APCRA list of chemicals and so we need to retrieve this from invitrodb v3.5.
+
+Note that in invitrodb v3.5, BSK data are represented as ac50 (modl_ga), but are actually lowest effect concentrations. This modeling choice was related to the low number of concentrations (most often 4), low number of replicates (most often 2), and low top-over-cutoff typically observed.Standard curve-fitting models had resulted in extremely low ac50s and so we chose a lowest effect concentration approach.
+
+```{r tcplconf-bsk, warning=FALSE, echo=FALSE, eval=FALSE}
+# get immunosuppressive reference drugs
+tcplConf(user='_dataminer',pass='pass',db='prod_internal_invitrodb_v3_5',host='ccte-mysql-res.epa.gov', drvr='MySQL')
+
+```
+
+```{r bsk-ref-drugs, warning=FALSE}
+
+immunosupp.drug.dtxsids <- c('DTXSID0020365', # cyclosporin A
+                             'DTXSID3047429', # dexamethasone sodium phosphate
+                             'DTXSID4020119', # azathioprine
+                             'DTXSID4020822' # methotrexate
+                             ) 
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+spids <- tcplLoadChem(field='dsstox_substance_id',val=immunosupp.drug.dtxsids) # get sample ids
+mc5.bsk.ref <- tcplPrepOtpt(tcplLoadData(lvl=5,type='mc',fld='aeid', val=bsk.aeid$aeid)) # get mc5 data
+mc5.bsk.ref <- mc5.bsk.ref[dsstox_substance_id %in% spids$dsstox_substance_id] # narrow mc5 data to immunosuppressive drugs
+```
+
+```{r bsk-comb-mc5, warning=FALSE, eval=FALSE}
+
+mc5.bsk.combined <- rbind(mega.mc5[asnm=='BSK'],
+                          mc5.bsk.ref,
+                          fill=TRUE)
+```
+
+```{r bsk-make-flagtbl, eval=FALSE,warning=FALSE}
+
+bsk.flag <- unique(mc5.bsk.combined[ , list(
+  total.endpoints.screened  = .N, #total number of aeids tested in mc
+  active.assay.count  = as.double(length(which(hitc==1))),  # active count
+  inactive.assay.count  = as.double(length(which(hitc==0))),  #inactive count
+  active.percent = round((length(which(hitc==1))/.N)*100,2), #active percent
+  inactive.percent = round((length(which(hitc==0))/.N)*100,2), #inactive percent
+  min.log.lec = min(modl_ga, na.rm=TRUE), 
+  med.log.lec = median(modl_ga, na.rm=TRUE),
+  acute.tox = min(modl_ga[aenm %in% c("BSK_3C_SRB_down", 
+                                      "BSK_4H_SRB_down", 
+                                      "BSK_BE3C_SRB_down", 
+                                      "BSK_CASM3C_SRB_down", 
+                                      "BSK_hDFCGF_SRB_down",
+                                      "BSK_KF3CT_SRB_down", 
+                                      "BSK_LPS_SRB_down", 
+                                      "BSK_SAg_SRB_down", 
+                                      "BSK_MyoF_SRB_down", 
+                                      "BSK_BF4T_SRB_down", 
+                                      "BSK_IMphg_SRB_down")], na.rm=TRUE),
+  skin.irrit.lec = min(modl_ga[aenm=='BSK_LPS_PGE2_up'], na.rm=TRUE),
+  skin.irrit.spec = (min(modl_ga[aenm %in% c("BSK_3C_SRB_down", 
+                                             "BSK_4H_SRB_down", 
+                                             "BSK_BE3C_SRB_down", 
+                                             "BSK_CASM3C_SRB_down", 
+                                             "BSK_hDFCGF_SRB_down", 
+                                             "BSK_KF3CT_SRB_down", 
+                                             "BSK_LPS_SRB_down", 
+                                             "BSK_SAg_SRB_down", 
+                                             "BSK_MyoF_SRB_down", 
+                                             "BSK_BF4T_SRB_down", 
+                                             "BSK_IMphg_SRB_down")], na.rm=TRUE)) - (min(modl_ga[aenm=='BSK_LPS_PGE2_up'], na.rm=TRUE)), 
+  skin.rash.lec = min(modl_ga[aenm %in% c('BSK_hDFCGF_VCAM1_up')], na.rm=TRUE),
+  skin.rash.spec = (min(modl_ga[aenm %in% c("BSK_3C_SRB_down", "BSK_4H_SRB_down", "BSK_BE3C_SRB_down", 
+"BSK_CASM3C_SRB_down", "BSK_hDFCGF_SRB_down", "BSK_KF3CT_SRB_down", 
+"BSK_LPS_SRB_down", "BSK_SAg_SRB_down", "BSK_MyoF_SRB_down", 
+"BSK_BF4T_SRB_down", "BSK_IMphg_SRB_down")], na.rm=TRUE)) - (min(modl_ga[aenm %in% c('BSK_hDFCGF_VCAM1_up')], na.rm=TRUE)),
+  skin.sens.lec = min(modl_ga[aenm=='BSK_hDFCGF_CollagenIII_down']),
+  skin.sens.spec = (min(modl_ga[aenm %in% c("BSK_3C_SRB_down", "BSK_4H_SRB_down", "BSK_BE3C_SRB_down", 
+"BSK_CASM3C_SRB_down", "BSK_hDFCGF_SRB_down", "BSK_KF3CT_SRB_down", 
+"BSK_LPS_SRB_down", "BSK_SAg_SRB_down", "BSK_MyoF_SRB_down", 
+"BSK_BF4T_SRB_down", "BSK_IMphg_SRB_down")], na.rm=TRUE)) - (min(modl_ga[aenm %in% c('BSK_hDFCGF_CollagenIII_down')], na.rm=TRUE)),
+skin.inflamm.lec = min(modl_ga[aenm %in% c('BSK_hDFCGF_CollagenIII_down','BSK_hDFCGF_VCAM1_up','BSK_LPS_PGE2_up')], na.rm=TRUE),
+skin.inflamm.spec = (min(modl_ga[aenm %in% c("BSK_3C_SRB_down", "BSK_4H_SRB_down", "BSK_BE3C_SRB_down", 
+"BSK_CASM3C_SRB_down", "BSK_hDFCGF_SRB_down", "BSK_KF3CT_SRB_down", 
+"BSK_LPS_SRB_down", "BSK_SAg_SRB_down", "BSK_MyoF_SRB_down", 
+"BSK_BF4T_SRB_down", "BSK_IMphg_SRB_down")], na.rm=TRUE)) - (min(modl_ga[aenm %in% c('BSK_hDFCGF_CollagenIII_down','BSK_hDFCGF_VCAM1_up','BSK_LPS_PGE2_up')], na.rm=TRUE)),
+  immun.sup.lec = min(modl_ga[aenm %in% bsk.aeid[activity=='immunosuppression']$aenm], na.rm=TRUE),
+  immun.sup.spec = (min(modl_ga[aenm %in% c("BSK_3C_SRB_down", "BSK_4H_SRB_down", "BSK_BE3C_SRB_down", 
+"BSK_CASM3C_SRB_down", "BSK_hDFCGF_SRB_down", "BSK_KF3CT_SRB_down", 
+"BSK_LPS_SRB_down", "BSK_SAg_SRB_down", "BSK_MyoF_SRB_down", 
+"BSK_BF4T_SRB_down", "BSK_IMphg_SRB_down")], na.rm=TRUE)) - (min(modl_ga[aenm %in% c('BSK_3C_Proliferation_down')], na.rm=TRUE))
+), by = list(dsstox_substance_id, chnm, casn)]) # could make this by spid because if there are n>1 spid the assay number will mess up
+
+invisible(lapply(names(bsk.flag), function(.name) set(bsk.flag, which(is.infinite(bsk.flag[[.name]])), j=.name, value=NA))) # remove Inf
+invisible(lapply(names(bsk.flag), function(.name) set(bsk.flag, which(is.nan(bsk.flag[[.name]])), j=.name, value=NA))) # remove NaN
+
+bsk.flag[,selective := ifelse(!is.na(acute.tox), acute.tox-immun.sup.lec, 3-immun.sup.lec)]
+colnames(bsk.flag)
+```
+Wrangling the data to visualize and adding the applicability domain information.
+
+```{r add-ad-to-bskflg, eval=FALSE, warning=FALSE}
+
+bsk.flag2 <- bsk.flag[,c('dsstox_substance_id',
+                        'chnm',
+                        'acute.tox',
+                        'immun.sup.lec',
+                        'selective')]
+
+bsk.flag2$aqc_indicator <- ad.tbl$aqc_indicator[match(bsk.flag2$dsstox_substance_id, ad.tbl$DTXSID)]
+bsk.flag2$apcra.pro.only <- ad.tbl$apcra.pro.only[match(bsk.flag2$dsstox_substance_id, ad.tbl$DTXSID)]
+
+# add BER
+bsk.flag2$ber.med.aed50 <- asnm.tier1.all.invivo$ber.med.aed50[match(bsk.flag2$dsstox_substance_id,
+                                                                     asnm.tier1.all.invivo$dsstox_substance_id)]
+
+bsk.flag2 <- bsk.flag2[order(ber.med.aed50)]
+
+```
+
+# MEA data {.tabset .tabset-fade .tabset-pills}
+
+Examine the pattern of the MEA data.
+In the end this was not very fruitful.
+
+
+## Define activity type for the aeid's in the MEA acute.
+
+```{r, warning=FALSE}
+
+mea.aeid <- unique(mega.mc5[asnm=='CCTE', c('aeid','aenm')])
+mea.aeid[,process := tstrsplit(aenm, "CCTE_Shafer_MEA_", keep=c(2))]
+mea.aeid[, direction := str_extract(aenm, "[a-z]{2}$")]
+
+## label signature activity groups
+
+### General Firing Activity
+mea.aeid[,activity := as.character(NA)]
+mea.aeid[grep('firing', aenm),activity := 'Firing']
+mea.aeid[grep('MFR',aenm), activity := 'Firing']
+mea.aeid[grep('acute_burst_number',aenm), activity := "Firing"]
+mea.aeid[grep('acute_spike_number',aenm), activity := "Firing"]
+
+### Burst structure
+mea.aeid[is.na(activity) & grep('burst',aenm), activity := "Bursting"]
+mea.aeid[is.na(activity) & grep('spike',aenm), activity := "Bursting"]
+
+### Connectivity
+mea.aeid[grep('network', aenm), activity := 'Connectivity']
+mea.aeid[grep('cross_correlation', aenm), activity := 'Connectivity']
+mea.aeid[grep('synchrony', aenm), activity := 'Connectivity']
+
+### Cytotoxicity
+mea.aeid[grep('LDH', aenm), activity := 'Cytotoxicity']
+mea.aeid[grep('AB', aenm), activity := 'Cytotoxicity']
+
+mea.aeid <- mea.aeid[order(activity,aeid)]
+# write.csv
+#write.csv(mea.aeid,"./output/mea_aeid_annotation_17apr2021.csv")
+
+# examine
+kable(mea.aeid, 
+          filter='top', 
+          options=list(pagelength=25, autoWidth=FALSE,  scrollX=TRUE, initComplete = JS(
+    "function(settings, json) {",
+    "$('body').css({'font-family': 'Calibri'});",
+    "}"
+  )))
+
+```
+
+## Make MEA flag
+
+```{r, eval=FALSE, warning=FALSE}
+mea.flag <- unique(mega.mc5[asnm=='CCTE' , list(
+  total.endpoints.screened  = .N, #total number of aeids tested in mc
+  active.assay.count  = as.double(length(which(hitc==1))),  # active count
+  inactive.assay.count  = as.double(length(which(hitc==0))),  #inactive count
+  active.percent = round((length(which(hitc==1))/.N)*100,2), #active percent
+  inactive.percent = round((length(which(hitc==0))/.N)*100,2), #inactive percent
+  min.log.acc = min(modl_acc, na.rm=TRUE), 
+  med.log.acc = median(modl_acc, na.rm=TRUE),
+  p5.log.acc = quantile(modl_acc, c(0.05),na.rm=TRUE),
+  up.ct = as.double(length(which(hitc==1 & aeid %in% mea.aeid[direction=='up']$aeid))),
+  dn.ct = as.double(length(which(hitc==1 & aeid %in% mea.aeid[direction=='dn']$aeid))),
+  bursting = min(modl_acc[aeid %in% mea.aeid[activity=='Bursting']$aeid], na.rm=TRUE),
+  connectivity = min(modl_acc[aeid %in% mea.aeid[activity=='Connectivity']$aeid], na.rm=TRUE),
+  firing = min(modl_acc[aeid %in% mea.aeid[activity=='Firing']$aeid], na.rm=TRUE),
+  cytotoxicity = min(modl_acc[aeid %in% mea.aeid[activity=='Cytotoxicity']$aeid], na.rm=TRUE)
+  ), by = list(dsstox_substance_id, chnm, casn, spid)]) # could make this by spid because if there are n>1 spid the assay number will mess up
+
+invisible(lapply(names(mea.flag), function(.name) set(mea.flag, which(is.infinite(mea.flag[[.name]])), j=.name, value=NA))) # remove Inf
+invisible(lapply(names(mea.flag), function(.name) set(mea.flag, which(is.nan(mea.flag[[.name]])), j=.name, value=NA))) # remove NaN
+
+mea.flag[,bursting.spec := ifelse(!is.na(cytotoxicity), cytotoxicity - bursting, 3-bursting), by=list(dsstox_substance_id)]
+mea.flag[,connectivity.spec := ifelse(!is.na(cytotoxicity), cytotoxicity - connectivity, 3-connectivity), by=list(dsstox_substance_id)]
+mea.flag[,firing.spec := ifelse(!is.na(cytotoxicity), cytotoxicity - firing, 3-firing), by=list(dsstox_substance_id)]
+
+```
+
+* get some reference chemicals
+
+```{r, warning=FALSE, eval=FALSE}
+
+mea <- tcplPrepOtpt(tcplLoadData(lvl=5,type='mc',fld='aeid',val=mea.aeid$aeid))
+#mea.ref <- mea[ chnm %in% c('Tributyltin chloride','Abamectin','Lindane','beta-Cyfluthrin')]
+
+mea.ref <- mea[dsstox_substance_id %in% c(
+  'DTXSID2020686', #lindane
+  'DTXSID3027403', # tributyltin chloride
+  'DTXSID8023892', # abamectin
+  'DTXSID8032330', # beta-Cyfluthrin
+  'DTXSID9058238')] # avermectin B1a
+
+
+```
+
+```{r, warning=FALSE}
+mea.ref.dtxsids <- c(
+  'DTXSID2020686', #lindane
+  'DTXSID3027403', # tributyltin chloride
+  'DTXSID8023892', # abamectin
+  'DTXSID8032330', # beta-Cyfluthrin
+  'DTXSID9058238') # avermectin B1a
+```
+
+```{r, warning=FALSE, eval=FALSE}
+mea.flag.ref <- unique(mea.ref[ , list(
+  total.endpoints.screened  = .N, #total number of aeids tested in mc
+  active.assay.count  = as.double(length(which(hitc==1))),  # active count
+  inactive.assay.count  = as.double(length(which(hitc==0))),  #inactive count
+  active.percent = round((length(which(hitc==1))/.N)*100,2), #active percent
+  inactive.percent = round((length(which(hitc==0))/.N)*100,2), #inactive percent
+  min.log.acc = min(modl_acc, na.rm=TRUE), 
+  med.log.acc = median(modl_acc, na.rm=TRUE),
+  p5.log.acc = quantile(modl_acc, c(0.05),na.rm=TRUE),
+  up.ct = as.double(length(which(hitc==1 & aeid %in% mea.aeid[direction=='up']$aeid))),
+  dn.ct = as.double(length(which(hitc==1 & aeid %in% mea.aeid[direction=='dn']$aeid))),
+  bursting = min(modl_acc[aeid %in% mea.aeid[activity=='Bursting']$aeid], na.rm=TRUE),
+  connectivity = min(modl_acc[aeid %in% mea.aeid[activity=='Connectivity']$aeid], na.rm=TRUE),
+  firing = min(modl_acc[aeid %in% mea.aeid[activity=='Firing']$aeid], na.rm=TRUE),
+  cytotoxicity = min(modl_acc[aeid %in% mea.aeid[activity=='Cytotoxicity']$aeid], na.rm=TRUE)
+  ), by = list(dsstox_substance_id, chnm, casn)]) # could make this by spid because if there are n>1 spid the assay number will mess up
+
+invisible(lapply(names(mea.flag.ref), function(.name) set(mea.flag.ref, which(is.infinite(mea.flag.ref[[.name]])), j=.name, value=NA))) # remove Inf
+invisible(lapply(names(mea.flag.ref), function(.name) set(mea.flag.ref, which(is.nan(mea.ref[[.name]])), j=.name, value=NA))) # remove NaN
+
+mea.flag.ref[,bursting.spec := ifelse(!is.na(cytotoxicity), cytotoxicity - bursting, 3-bursting), by=list(dsstox_substance_id)]
+mea.flag.ref[,connectivity.spec := ifelse(!is.na(cytotoxicity), cytotoxicity - connectivity, 3-connectivity), by=list(dsstox_substance_id)]
+mea.flag.ref[,firing.spec := ifelse(!is.na(cytotoxicity), cytotoxicity - firing, 3-firing), by=list(dsstox_substance_id)]
+
+```
+
+Importantly, we only let the MEA flag be active if > 3 endpoints in the same direction are positive.
+The 5th percentile ACC of the positive MEA chemicals will serve as a potency comparator/flag (if most sensitive potency for the chemical).
+
+```{r, warning=FALSE, eval=FALSE}
+
+mea.flag2 <- rbind(mea.flag[,-c('spid')], mea.flag.ref, fill=TRUE)
+
+#mea.flag2[dsstox_substance_id %in% c(
+#  'DTXSID2020686', #lindane
+#  'DTXSID3027403', # tributyltin chloride - clearly tested in 2 spids
+#  'DTXSID8023892', # abamectin
+#  'DTXSID8032330', # beta-Cyfluthrin
+#  'DTXSID9058238')]
+
+mea.flag3 <- mea.flag2[,c('dsstox_substance_id',
+                        'chnm',
+                        'casn',
+                        'total.endpoints.screened',
+                        'up.ct',
+                        'dn.ct',
+                        'p5.log.acc',
+                        'firing',
+                        'bursting',
+                        'connectivity',
+                        'cytotoxicity')]
+
+# should filter based on hitc sum
+# should require at least 3-4 to be positive in a single direction
+# edit the flag on this basis, then flag becomes the min potency in acute MEA if it is the min potency for the chemical
+# consider 5th percentile value of potency after filtering
+
+mea.flag3[, mea.call := 0]
+mea.flag3[ up.ct > 3 | dn.ct>3, mea.call := 1]
+
+mea.flag3$min_nam <- asnm.tier1$col_min[match(mea.flag3$dsstox_substance_id,
+                                     asnm.tier1$dsstox_substance_id)]
+mea.flag3[min_nam=='CCTE', min_nam := 'MEA']
+mea.flag3[!min_nam=='MEA', mea.call := 0]
+```
+
+# Combine potency related flags {.tabset .tabset-fade .tabset-pills}
+
+## Put MEA and BSK together
+
+```{r, warning=FALSE, eval=FALSE}
+head(mea.flag3)
+```
+```{r, warning=FALSE}
+head(bsk.flag2)
+```
+```{r, warning=FALSE}
+
+mea.bsk.comb <- merge.data.table(mea.flag3[,-c('chnm')],
+                                 bsk.flag2,
+                                 by=c('dsstox_substance_id'),
+                                 fill=TRUE,
+                                 all.x=TRUE,
+                                 all.y=TRUE)
+
+# deal with issue of different sets of chemicals
+# get all numbers into the flag table for potency-related flags
+
+mea.bsk.comb$min_nam <- asnm.tier1$col_min[match(mea.bsk.comb$dsstox_substance_id,
+                                     asnm.tier1$dsstox_substance_id)]
+mea.bsk.comb[min_nam=='CCTE', min_nam := 'MEA']
+mea.bsk.comb$aqc_indicator <- ad.tbl$aqc_indicator[match(mea.bsk.comb$dsstox_substance_id, ad.tbl$DTXSID)]
+mea.bsk.comb$apcra.pro.only <- ad.tbl$apcra.pro.only[match(mea.bsk.comb$dsstox_substance_id, ad.tbl$DTXSID)]
+mea.bsk.comb$ber.med.aed50 <- asnm.tier1.all.invivo$ber.med.aed50[match(mea.bsk.comb$dsstox_substance_id,
+                                                                     asnm.tier1.all.invivo$dsstox_substance_id)]
+
+mea.bsk.comb <- mea.bsk.comb[order(ber.med.aed50)]
+
+```
+
+## Add HIPPTox organ flags
+Here we show the in vitro potency for HIPPTox so it is comparable to MEA and BSK potencies in vitro.
+
+```{r all-org-tbl, warning=FALSE, eval=FALSE}
+
+all.organs <- merge.data.table(mea.bsk.comb,
+                               asnm.tier1[,c(
+                                 'dsstox_substance_id',
+                                 'Astar_BEAS2B_final',
+                                 'Astar_HepG2_final',
+                                 'Astar_HK2_final')],
+                               all.x=TRUE,
+                               all.y=TRUE,
+                               by = c('dsstox_substance_id'))
+
+all.organs$chnm_mea <- mea.ref$chnm[match(all.organs$dsstox_substance_id,
+                                              mea.ref$dsstox_substance_id)]
+all.organs[is.na(chnm), chnm := chnm_mea]
+all.organs[,c('chnm_mea') := NULL]
+
+colnames(all.organs)
+```
+## Make target organ hazard flags
+In this chunk, we make the table that will go to supplement.
+Please note that these are all in vitro micromolar potencies, as selective activity and other decisions were made on the in vitro potency scale.
+
+Also note that only 133/196 substances here had MEA data.
+```{r, warning=FALSE}
+
+#colnames(apcra.list)
+nrow(apcra.list[mea.acute.any==1])
+```
+
+```{r all-org-flg, warning=FALSE, eval=FALSE}
+
+all.organs.flag <- all.organs[,c('dsstox_substance_id',
+                                 'chnm',
+                                 'apcra.pro.only',
+                                 'min_nam',
+                                 'ber.med.aed50',
+                                 'aqc_indicator',
+                                 'p5.log.acc',
+                                 'mea.call',
+                                 'firing',
+                                 'bursting',
+                                 'connectivity',
+                                 'cytotoxicity',
+                                 'acute.tox',
+                                 'immun.sup.lec',
+                                 'selective',
+                                 'Astar_BEAS2B_final',
+                                 'Astar_HepG2_final',
+                                 'Astar_HK2_final'
+                                 )]
+setnames(all.organs.flag, c('p5.log.acc',
+                                 'mea.call',
+                                 'firing',
+                                 'bursting',
+                                 'connectivity',
+                                 'cytotoxicity',
+                                 'acute.tox',
+                                 'immun.sup.lec',
+                                 'selective',
+                                 'Astar_BEAS2B_final',
+                                 'Astar_HepG2_final',
+                                 'Astar_HK2_final'),
+         c('MEA_p5_potency',
+                                 'MEA_call',
+                                 'MEA_firing',
+                                 'MEA_bursting',
+                                 'MEA_connectivity',
+                                 'MEA_cytotoxicity',
+                                 'BioMAP_acute',
+                                 'BioMAP_immunosupp',
+                                 'BioMAP_immuno_sel',
+                                 'HIPPTox_Lung',
+                                 'HIPPTox_Liver',
+                                 'HIPPTox_Kidney')
+)
+
+all.organs.flag <- all.organs.flag[order(ber.med.aed50)]
+apcra.list[is.na(mea.acute.any), mea.acute.any:=0]
+all.organs.flag$mea_avail <- apcra.list$mea.acute.any[match(all.organs.flag$dsstox_substance_id,
+                                                            apcra.list$DTXSID)]        
+```
+
+
+Begin to shape the matrix for heatmap presentation.
+
+```{r all-org-mats, warning=FALSE}
+organs_mat <- all.organs.flag[apcra.pro.only==1]
+organs_mat <- organs_mat[aqc_indicator==1]
+organs_mat <- organs_mat[ber.med.aed50 < 4 ]
+
+
+organs_ref_mat <- unique(all.organs.flag[dsstox_substance_id %in% c(mea.ref.dtxsids, immunosupp.drug.dtxsids)])
+
+chnm_order <- c('Abamectin','beta-Cyfluthrin','Lindane','Tributyltin chloride',
+                        'Azathioprine', 'Cyclosporin A', 'Dexamethasone sodium phosphate','Methotrexate')
+organs_ref_mat$chnm <- factor(organs_ref_mat$chnm, levels=chnm_order)
+organs_ref_mat <- organs_ref_mat[order(as.factor(chnm))]
+organs_ref_mat
+```
+
+```{r, warning=FALSE}
+
+colnames(organs_mat)
+
+```
+
+```{r, warning=FALSE}
+
+# comprise the main matrices
+
+# APCRA test chemical matrix
+organs_mat2 <- as.matrix(organs_mat[,c("MEA_p5_potency",
+                                     #  "MEA_call",
+                                       "MEA_firing","MEA_bursting","MEA_connectivity","MEA_cytotoxicity",   
+                                       "BioMAP_acute","BioMAP_immunosupp","BioMAP_immuno_sel",
+                                       "HIPPTox_Lung","HIPPTox_Liver","HIPPTox_Kidney")])
+rownames(organs_mat2) <- organs_mat[, chnm] # define rownames as chemical name
+
+# reference matrix
+organs_ref2 <- as.matrix(organs_ref_mat[,c("MEA_p5_potency",
+                                           #"MEA_call",
+                                           "MEA_firing","MEA_bursting","MEA_connectivity","MEA_cytotoxicity",   
+                                       "BioMAP_acute","BioMAP_immunosupp","BioMAP_immuno_sel",
+                                       "HIPPTox_Lung","HIPPTox_Liver","HIPPTox_Kidney")])
+rownames(organs_ref2) <- organs_ref_mat[, chnm] # define rownames as chemical name
+```
+
+```{r, warning=FALSE}
+
+# annotations for main hm
+anno_df2 <- data.frame(rownames(organs_mat2))
+anno_df2$min_nam <- all.organs.flag$min_nam[match(anno_df2[,1],
+                                            all.organs.flag$chnm)]
+anno_df2$chnm <- all.organs.flag$chnm[match(anno_df2[,1],
+                                      all.organs.flag$chnm)]
+anno_df2$ber <- all.organs.flag$ber.med.aed50[match(anno_df2[,1],
+                                             all.organs.flag$chnm)]
+anno_df2$mea_avail <- all.organs.flag$mea_avail[match(anno_df2[,1],
+                                                      all.organs.flag$chnm)]
+
+anno_df2$mea_call <- all.organs.flag$MEA_call[match(anno_df2[,1],
+                                                      all.organs.flag$chnm)]
+
+all.organs.flag[mea_avail==1, mea_avail_face := 'plain']
+all.organs.flag[mea_avail==0, mea_avail_face := 'italic']
+all.organs.flag[MEA_call==1, mea_avail_face := 'bold']
+
+all.organs.flag[mea_avail==1, mea_avail_col := 'black']
+all.organs.flag[mea_avail==0, mea_avail_col := 'blue']
+all.organs.flag[MEA_call==1, mea_avail_col := 'red']
+
+
+anno_df2$mea_avail_face <- all.organs.flag$mea_avail_face[match(anno_df2[,1],
+                                                      all.organs.flag$chnm)]
+
+anno_df2$mea_avail_col <- all.organs.flag$mea_avail_col[match(anno_df2[,1],
+                                                      all.organs.flag$chnm)]
+
+left_ha2 <- rowAnnotation(min_nam = anno_text(anno_df2$min_nam,
+                                              gp=gpar(fontface=anno_df2$mea_avail_face,
+                                                      col=anno_df2$mea_avail_col,
+                                                      fontsize=10,fontfamily='sans'),
+                                            just='right',
+                                            location=1,
+                                            show_name = FALSE))
+right_ha2 <- rowAnnotation(BER = anno_barplot(anno_df2$ber, width = unit(4,'cm')))
+
+# annotations for ref hm
+anno_ref2 <- data.frame(rownames(organs_ref2))
+anno_ref2$chnm <- all.organs.flag$chnm[match(anno_ref2[,1],
+                                      all.organs.flag$chnm)]
+```
+
+```{r, warning=FALSE}
+col_fun = colorRamp2(c(-2, 0, 2, 4, 6), c('#F0F921FF','#E16462FF','#6A00A8FF','#0D0887FF', 'gray'))
+hm_organs <- Heatmap(matrix = organs_mat2, 
+                       cluster_columns = FALSE,
+                       cluster_rows=FALSE,
+                       name="log10-mg/kg/day",
+                       #col=col_fun,
+                       na_col='gray',
+                       col = col_fun,
+                       show_row_names = TRUE, 
+                       row_dend_width = unit(3, "cm"),
+                       column_names_max_height = unit(8, "cm"),
+                       column_names_gp = gpar(fontsize = 12),
+                     row_names_gp = gpar(fontsize=10),
+                       heatmap_legend_param = list(title = expression(paste("In vitro potency (",mu,"M)")),
+                                                   legend_direction = 'horizontal'),
+                       width=unit(6,'cm'),
+                       height = unit(14, 'cm'),
+                       rect_gp = gpar(col = "gray", lwd = 2),
+                       column_names_side='top',
+                       left_annotation = left_ha2,
+                       right_annotation = right_ha2)
+
+hm_organs_ref <- Heatmap(matrix = organs_ref2, 
+                       cluster_columns = FALSE,
+                       cluster_rows=FALSE,
+                       name="log10-mg/kg/day",
+                       col=col_fun,
+                       na_col='gray',
+                       #col = viridis(option='A', 100),
+                       show_row_names = TRUE, 
+                       #row_dend_width = unit(3, "cm"),
+                       #column_names_max_height = unit(8, "cm"),
+                       column_names_gp = gpar(fontsize = 12),
+                       row_names_gp = gpar(fontsize=10,fontfamily='sans'),
+                       heatmap_legend_param = list(title = expression(paste("In vitro potency (",mu,"M)")),
+                                                   legend_direction = 'horizontal'),
+                       #width=unit(6,'cm'),
+                       height = unit(4, 'cm'),
+                       rect_gp = gpar(col = "gray", lwd = 2),
+                       column_names_side='top')
+
+```
+
+```{r, warning=FALSE, fig.height=10, fig.width=12}
+
+hm.org <- draw(hm_organs %v%  hm_organs_ref, 
+              heatmap_legend_side='bottom',
+              ht_gap = unit(1, "cm"))
+```
+```{r, eval=FALSE, echo=FALSE,warning=FALSE}
+
+file.dir <- paste("./output", sep="")
+file.name <- paste("/Figure_Organs_HM_", Sys.Date(), ".png", sep="")
+file.path <- paste(file.dir, file.name, sep="")
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+png(file.path, width = 5000, height = 5000, res=450)
+hm.org
+dev.off()
+
+```
+
+```{r deprecated-hm-export, warning=FALSE, eval=FALSE, echo=FALSE}
+tiff(filename='./output/Fig_hm_dart.tif',compression='lzw',units='in', width=11, height=9, res=450)
+hm.ed <- draw(hm_dart %v%  hm_dart_ref, 
+              heatmap_legend_side='bottom',
+              ht_gap = unit(1, "cm"))
+dev.off()
+tiff(filename='./output/Fig_hm_organs_10Dec2023.tif',compression='lzw',units='in', width=12.5, height=10, res=450)
+hm.org <- draw(hm_organs %v%  hm_organs_ref, 
+              heatmap_legend_side='bottom',
+              ht_gap = unit(1, "cm"))
+
+dev.off()
+
+```
+# Make the preliminary output spreadsheet {.tabset .tabset-fade .tabset-pills}
+
+## Combine flags and AED/in vivo table
+
+This is specific to APCRA chemicals and their data.
+We are going to add this to an existing table with all columns.
+Then, we will make a streamlined version of the table for supplement/sharing.
+
+```{r, warning=FALSE}
+colnames(asnm.tier1.all.invivo)
+```
+
+```{r, warning=FALSE, eval=FALSE}
+apcra.tbl.draft <- merge.data.table(asnm.tier1.all.invivo,
+                                    asnm.tier1.all.ratios[,c('dsstox_substance_id',
+                                                             'pod.ratio5',
+                                                             'pod.ratio25'
+                                                             )],
+                                    by='dsstox_substance_id',
+                                    all.x=TRUE)
+
+
+
+
+```
+
+```{r, echo=FALSE, eval=FALSE, warning=FALSE}
+dput(colnames(dart.flag))
+```
+Add in critical elements of the DART flag table.
+
+```{r, warning=FALSE, eval=FALSE}
+apcra.tbl.draft <- merge.data.table(apcra.tbl.draft,
+                                    dart.flag[,c('dsstox_substance_id',
+                                                 'chnm',
+                                                 'min_nam',
+                                                 "dev.test",
+                                                 "dev.flag", 
+                                                 "dev.flag.specific", 
+                                                 "final.er.flag", 
+                                                 "final.ar.flag")],
+                                    by='dsstox_substance_id',
+                                    all.x=TRUE)
+```
+
+```{r, eval=FALSE, echo=FALSE, warning=FALSE}
+dput(colnames(all.organs.flag))
+```
+
+Add in critical elements of the target organ system flag table.
+
+```{r, warning=FALSE, eval=FALSE}
+apcra.tbl.draft <- merge.data.table(apcra.tbl.draft,
+                                    all.organs.flag[,c(
+                                      "dsstox_substance_id",
+                                      "mea_avail",
+                                      "MEA_p5_potency", 
+                                    "MEA_call", 
+                                    "MEA_firing", 
+                                    "MEA_bursting", 
+                                    "MEA_connectivity", 
+                                    "MEA_cytotoxicity", 
+                                    "BioMAP_acute", 
+                                    "BioMAP_immunosupp", 
+                                    "BioMAP_immuno_sel", 
+                                    "HIPPTox_Lung", 
+                                    "HIPPTox_Liver", 
+                                    "HIPPTox_Kidney")],
+                                    by='dsstox_substance_id',
+                                    all.x=TRUE)
+```
+
+Calculate the standard deviation of the AED50s by assay source, excluding HIPPTox.
+
+```{r, warning=FALSE, eval=FALSE}
+
+apcra.tbl.draft <- apcra.tbl.draft %>% rowwise() %>% mutate(aed50_sd=sd(c(aed50.atg, aed50.bsk, aed50.ccte, aed50.nvs, aed50.stm, aed50.httr.mcf7,aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os),na.rm=TRUE)) %>% data.table()
+
+#duplicated(apcra.tbl.draft)
+apcra.tbl.draft <- unique(apcra.tbl.draft)
+#apcra.tbl.draft[c(26:27),]
+#apcra.tbl.draft <- apcra.tbl.draft[-c(27),] # remove replicate endosulfan row - give preference to MEA call = 1
+```
+
+Make a reduced table that is easier to navigate.
+
+```{r, warning=FALSE, eval=FALSE}
+dput(colnames(apcra.tbl.draft))
+
+```
+
+```{r deprecated-reduced-tbl, echo=FALSE, warning=FALSE, eval=FALSE}
+
+apcra.tbl.reduced <- apcra.tbl.draft[,c("dsstox_substance_id",
+                                        "CASRN", 
+                                        "preferred_name", 
+                                        "chnm", 
+                                        "apcra.pro.only", 
+                                        "T0", "T4", "Call", "aqc_iv_pass", "aqc_indicator", 
+                                        "AVERAGE_MASS", "log10VP", "OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED", "logP.indicator", "mw.indicator", "logVP.indicator",
+                                        "the.day",
+                                        "aed50.atg", "aed50.bsk", "aed50.ccte", "aed50.nvs", "aed50.stm", "aed50.httr.mcf7",
+                                        "aed50.httr.u2os","aed50.httr.heparg","aed50.htpp.u2os","aed50.astar.beas2b",
+                                        "aed50.astar.hepg2","aed50.astar.hek293", 
+                                        "aed50_sd",
+                                        "model.aed50", "med.aed50", "min.aed50", 
+                                        
+                                        "log.p5.toxval.pod", 
+                                        "log.p5.toxval.sub",
+                                        "log.ECHA_min_systemic_POD_mkd", "log.repdose.90d.pod", "log.repdose.any.pod", 
+                                        "ug.kg.bw.day", "ttc", 
+                                        "pod.ratio", "ttc.ratio", "sub.ratio", "pod.ratio.size", 
+                                        "seem3.u95.log10", 
+                                        "seem3.log10", 
+                                        "ber.targeted", 
+                                        "ber.httr", 
+                                        "ber.htpp", 
+                                        "ber.astar", 
+                                        "ber.med.aed50", 
+                                        "MEA_p5_potency", 
+                                        "MEA_call", 
+                                        "MEA_firing", 
+                                        "MEA_bursting", 
+                                        "MEA_connectivity", 
+                                        "MEA_cytotoxicity", 
+                                        "BioMAP_acute", 
+                                        "BioMAP_immunosupp", 
+                                        "BioMAP_immuno_sel", 
+                                        "HIPPTox_Lung", 
+                                        "HIPPTox_Liver", 
+                                        "HIPPTox_Kidney")]
+
+
+
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+apcra.tbl.select <- apcra.tbl.reduced[, c("dsstox_substance_id",
+                                        "CASRN", 
+                                        "preferred_name", 
+                                        "chnm", 
+                                        "apcra.pro.only", 
+                                        "T0", "T4", "Call", "aqc_iv_pass", "aqc_indicator", 
+                                        "AVERAGE_MASS", "log10VP", "OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED", 
+                                        "the.day",
+                                        "aed50_sd",
+                                        "med.aed50",
+                                        
+                                        "log.p5.toxval.pod", 
+                                        "log.p5.toxval.sub",
+                                        "log.ECHA_min_systemic_POD_mkd", "log.repdose.90d.pod", "log.repdose.any.pod", 
+                                        "ug.kg.bw.day", "ttc", 
+                                        "pod.ratio", "ttc.ratio", "sub.ratio", "pod.ratio.size", 
+                                        "seem3.u95.log10", 
+                                        "seem3.log10", 
+                                        "ber.targeted", 
+                                        "ber.httr", 
+                                        "ber.htpp", 
+                                        "ber.astar", 
+                                        "ber.med.aed50", 
+                                         
+                                        "MEA_call", 
+                                        
+                                        "BioMAP_immunosupp", 
+                                        "BioMAP_immuno_sel", 
+                                        "HIPPTox_Lung", 
+                                        "HIPPTox_Liver", 
+                                        "HIPPTox_Kidney") ]
+
+
+```
+
+## Save each table
+This is to include all reference chemicals associated with each flag
+
+```{r, warning=FALSE, eval=FALSE}
+
+save(ad.tbl,
+     #apcra.tbl.reduced,
+     #apcra.tbl.select,
+     apcra.tbl.draft,
+     asnm.tier1.all.ratios,
+     dart.flag, 
+     er.ar.apcra, 
+     dev.flag,
+     all.organs.flag,
+     bsk.flag2,
+     mea.flag3, 
+     file='./output/APCRA_haz_flg_BER.RData')
+
+list_data<- list("full_apcra_tbl" = as.data.frame(apcra.tbl.draft),
+                 "pod_ratios_apcra_tbl" = as.data.frame(asnm.tier1.all.ratios),
+                 "ad.tbl" = as.data.frame(ad.tbl),
+          "dart.flag" = as.data.frame(dart.flag),
+          "er.ar.apcra" = as.data.frame(er.ar.apcra),
+          "dev.flag"= as.data.frame(dev.flag),
+          "all.organs.flag" = as.data.frame(all.organs.flag),
+          "BioMAP.immune.flag" = as.data.frame(bsk.flag2),
+          "MEA.neuro.flag" = as.data.frame(mea.flag3))
+
+write.xlsx(list_data, './output/SuppFile_APCRA_haz_flg_BER_May2024.xlsx')
+```
+
+# Reproducibility
+```{r, warning=FALSE}
+
+print(sessionInfo())
+```

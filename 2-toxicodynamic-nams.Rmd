@@ -1,0 +1,1068 @@
+---
+title: "2 Toxicodynamic NAM Compilation"
+author: "Katie Paul Friedman"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    collapsed: yes
+    df_print: paged
+    lightbox: no
+    number_sections: yes
+    self_contained: yes
+    thumbnails: no
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE}
+library(caret)
+library(circlize)
+library(ComplexHeatmap)
+library(cowplot)
+library(data.table)
+library(DescTools)
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(ggpubr)
+library(ggstance)
+library(gplots)
+library(gridExtra)
+library(httk)
+library(kableExtra)
+library(openxlsx)
+library(randomForest)
+library(RMySQL)
+library(stringr)
+library(tidyr)
+library(tcpl)
+library(viridis)
+
+```
+
+```{r, echo=FALSE, eval=FALSE}
+tcplConf(user='_dataminer', pass='pass', db='prod_internal_invitrodb_v3_5', drvr='MySQL', host='ccte-mysql-res.epa.gov')
+con <- dbConnect(drv = RMySQL::MySQL(), user="_dataminer", #fill user
+                 password = "pass", # fill pass
+                 host = "ccte-mysql-res.epa.gov", database = prod_internal_invitrodb_v3_5)
+```
+
+```{r load-apcra-list, warning=FALSE}
+
+apcra.pro <- fread('./source/chem/apcra_pro.csv') # APCRA prospective chemicals
+apcra.pro[,c(1) := NULL]
+setnames(apcra.pro, c('V2','V3','V4'), c('DTXSID','CASRN','preferred_name'))
+apcra.pro <- apcra.pro[-c(1),]
+apcra.pro[,list := 'Pro']
+
+# annotate chemicals that are also in APCRA retrospective case study - these will likely be data-rich
+apcra.ret <- as.data.table(read.xlsx('./source/chem/Supp_File_2_pod_ratio_master_final.xlsx', sheet=1)) 
+apcra.pro[,apcra.ret := 0]
+apcra.ret.dtxsids <- apcra.ret[,DTXSID]
+apcra.pro[DTXSID %in% apcra.ret.dtxsids, apcra.ret := 1]
+
+```
+
+```{r, warning=FALSE}
+#load('./source/in_vitro/tier1_NAMs_apcra_pro_04032023.RData')
+load('./source/in_vitro/tier1_NAMs_apcra_pro_02262024.RData')
+load(file='./source/chem/apcra_chem_ad.RData')
+```
+
+# Step 1: ToxCast Dataset {.tabset .tabset-fade .tabset-pills}
+
+## Understand importance of assay technology for in vitro POD
+
+* Take a look at whole invitrodb version 3.5 for as many chemicals as possible.
+
+### Load invitrodb data to get potency estimates
+```{r, warning=FALSE, eval=FALSE}
+
+chems <- tcplLoadChem()
+mc5 <- tcplPrepOtpt(tcplLoadData(val=chems$spid, lvl=5, type = 'mc',fld='spid'))
+mc6 <- tcplPrepOtpt(tcplLoadData(lvl=6, fld='m4id', val=mc5$m4id, type='mc'))
+setDT(mc6)
+mc6_mthds <- mc6[ , .( mc6_mthd_id = paste(mc6_mthd_id, collapse=",")), by = m4id]
+mc6_flags <- mc6[ , .( flag = paste(flag, collapse=";")), by = m4id]
+mc5$mc6_flags <- mc6_mthds$mc6_mthd_id[match(mc5$m4id, mc6_mthds$m4id)]
+mc5[, flag.length := ifelse(!is.na(mc6_flags), count.fields(textConnection(mc6_flags), sep =','), NA)]
+
+# filter the dataset, with coarse filters
+filter_mc5 <- function(dat){
+dat[hitc==1 & flag.length < 3, use.me := 1]
+dat[hitc==1 & is.na(flag.length), use.me := 1]
+dat[hitc==1 & flag.length >= 3, use.me := 0]
+dat[fitc %in% c(36,45), use.me := 0]
+dat[hitc==-1, use.me := 0] # make hitc interpretable as a positive sum
+dat[use.me==0, modl_ga := as.numeric(NA)]
+dat[use.me==0, hitc := 0]
+dat[hitc==0, modl_ga := as.numeric(NA)]
+dat[hitc==0, modl_acc := as.numeric(NA)]
+  return(dat)
+}
+
+filter_mc5(mc5)
+
+mc5[hitc==1,ac50_uM := ifelse(!is.na(modl_ga), 10^modl_ga, NA)]
+mc5[hitc==1, acc_uM := ifelse(!is.na(modl_acc), 10^modl_acc, NA)]
+
+# understand assay source as a surrogate for technology/bioactivity
+mc5[,asnm := tstrsplit(aenm, "_", fixed=TRUE, keep=c(1))]
+mc5.hitc1 <- mc5[hitc==1]
+mc5.hitc1[grep('_dn',aenm), direction := 'dn']
+mc5.hitc1[asnm=='ATG' & direction=='dn', use.me := 0]
+mc5.hitc1[use.me==0, hitc := 0]
+
+mc5.hitc1 <- mc5.hitc1[hitc==1] # this takes out ~1500 rows or so by removing the ATG _dn
+
+mc5.hitc1[,modl_ga_5p := quantile(modl_ga, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id)]
+mc5.hitc1[,asnm_modl_ga_5p := quantile(modl_ga, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id, asnm)]
+
+mc5.hitc1[,modl_acc_5p := quantile(modl_acc, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id)]
+mc5.hitc1[,asnm_modl_acc_5p := quantile(modl_acc, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id, asnm)]
+
+```
+
+* The modl_acc is very similar to the modl_ga.
+
+```{r, warning=FALSE}
+acc2ac50 <- lm(modl_ga ~ modl_acc, 
+            data= mega.mc5.hitc1)
+
+summary(acc2ac50)
+
+```
+
+```{r, warning=FALSE}
+
+ggplot(data=mega.mc5.hitc1, aes(x=modl_ga_5p, y=modl_acc_5p))+
+geom_point(size=2)+ 
+  #geom_text(angle=90, vjust=-1, hjust=0.5)+
+  #geom_text_repel(max.overlaps = 100)+
+  xlab('5th %-ile ToxCast AC50') +
+  ylab('5th %-ile ToxCast ACC') +
+  geom_abline(slope=1, intercept=0) +
+  geom_abline(slope=1, intercept=1/2, linetype="dashed") +
+  geom_abline(slope=1, intercept=-1/2, linetype="dashed") +
+  theme_bw()+
+  coord_cartesian(xlim=c(-6,3), ylim=c(-6,3))
+
+```
+
+# Step 2: Build APCRA Case Study Data Set for POD-NAM {.tabset .tabset-fade .tabset-pills}
+
+## STM data
+
+* MC data for only 61 chemicals in case study list.
+
+```{r, warning=FALSE, eval=FALSE}
+
+mc5.stm <- mc5[grep('STM_H9',aenm)]
+mc5.stm <- mc5.stm[dsstox_substance_id %in% apcra.list[,DTXSID]]
+length(unique(mc5.stm$dsstox_substance_id)) # only 61 chemicals
+
+```
+
+* Stemina data: first check for full dataset.
+* We have 199/201 between the sc and mc screens; missing only DTXSID4032376 and DTXSID108952020. Consider this complete.
+
+```{r, warning=FALSE, eval=FALSE}
+
+stm.aeid <- tcplLoadAeid(val=14,fld='asid',add.fld='acid')
+
+sc2.stm <- tcplPrepOtpt(tcplLoadData(lvl=2,type='sc',fld='aeid',val=stm.aeid[,aeid]))
+sc2.stm <- sc2.stm[dsstox_substance_id %in% apcra.list[,DTXSID]]
+length(unique(sc2.stm$dsstox_substance_id)) #179
+
+#apcra.list[!DTXSID %in% sc2.stm[,dsstox_substance_id]] # 22 substances
+
+stm.dtxsid <- union(unique(mc5.stm[,dsstox_substance_id]), unique(sc2.stm[,dsstox_substance_id]))
+
+#apcra.list[!DTXSID %in% stm.dtxsid] # missing only DTXSID4032376 and DTXSID108952020; so only 199/201 screened. Consider complete.
+
+apcra.list[, stm.sc := 0]
+apcra.list[DTXSID %in% sc2.stm[,dsstox_substance_id], stm.sc := 1]
+apcra.list[, stm.mc := 0]
+apcra.list[DTXSID %in% mc5.stm[,dsstox_substance_id], stm.mc := 1]
+```
+
+* Now filter to determine positive/negative desigation for Stemina.
+* Calculate a draft dev tox flag that includes specificity as an additional filter. Most recent paper from Zurlinden et al. 2019 suggests that cytotoxicity in this model is not necessarily independent of developmental toxicity.
+
+```{r, warning=FALSE, eval=FALSE}
+
+neg.stm.dtxsid <- apcra.list[stm.sc==1 & stm.mc==0, DTXSID]
+examples <- sc2.stm[aeid==1691 & dsstox_substance_id %in% neg.stm.dtxsid & hitc==1]
+#sc0.stm <- tcplPrepOtpt(tcplLoadData(lvl=0,type='sc',fld='acid',val=1031))
+
+mc5.stm <- mc5.stm[aeid %in% c(1691,1858)]
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+# 5 substances were positive in sc and not tested in mc for some reason
+add <- sc2.stm[dsstox_substance_id %in% examples[,dsstox_substance_id] & aeid==1691]
+add <- add[,c('spid','chid','casn','chnm', 'dsstox_substance_id','code','aeid', 'bmad','max_med','hitc','coff','resp_unit','conc_unit')]
+add[, modl_ga := 2] # make the top tested concentration the potency for these 5
+add[, use.me := 1]
+mc5.stm.test <- rbind(mc5.stm, add, use.names=TRUE, fill=TRUE)
+
+apcra.list[,stm.any := 0]
+apcra.list[stm.mc==1|stm.sc==1,stm.any := 1]
+#nrow(apcra.list[stm.any==1])#199
+```
+
+## MEA data
+
+* MEA acute data were released in invitrodb v3.5, but not sc data.
+
+```{r, warning=FALSE, echo=FALSE, eval=FALSE}
+tcplConf(user='_dataminer', pass='pass', db='prod_internal_invitrodb_v3_5', drvr='MySQL', host='ccte-mysql-res.epa.gov')
+con <- dbConnect(drv = RMySQL::MySQL(), user="_dataminer", #fill user
+                 password = "pass", # fill pass
+                 host = "ccte-mysql-res.epa.gov", database = prod_internal_invitrodb_v3_5)
+
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+# check to see what we have
+mc5.mea <-mega.mc5[grep('CCTE_Shafer_MEA_acute',aenm)]
+mc5.mea <- mc5.mea[dsstox_substance_id %in% apcra.list[,DTXSID]]
+#length(unique(mc5.mea$dsstox_substance_id)) #133
+
+apcra.list[!DTXSID %in% mc5.mea[,dsstox_substance_id], mea.acute :=0]
+apcra.list[DTXSID %in% mc5.mea[,dsstox_substance_id], mea.acute :=1]
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+# tried to find the ~65 missing substances, but could not find them in other data sources
+mea.missing <- apcra.list[mea.acute==0, DTXSID]
+sc0.mea <- tcplPrepOtpt(tcplLoadData(lvl=0,type='sc',fld='acid', val=1916))
+sc0.mea <- sc0.mea[dsstox_substance_id %in% mea.missing]
+
+apcra.list[DTXSID %in% sc0.mea[,dsstox_substance_id],mea.acute.sc :=1]
+#nrow(apcra.list[mea.acute.sc==1|mea.acute==1]) #133
+#nrow(apcra.list[mea.acute==0 & mea.acute.sc==1]) #0
+#apcra.list[mea.acute.sc==1 | mea.acute==1, mea.acute.any := 1]
+#apcra.list[is.na(mea.acute.any), mea.acute.any := 0]
+
+
+```
+
+
+
+```{r, warning=FALSE, eval=FALSE, echo=FALSE}
+
+# sc MEA acute data were not released in invitrodb v3.5.
+sc1.mea <- tcplPrepOtpt(tcplLoadData(lvl=1,type='sc',fld='acid', val=1916))
+sc1.mea <- sc1.mea[dsstox_substance_id %in% mea.missing]
+
+sc2.mea <- tcplPrepOtpt(tcplLoadData(lvl=2,type='sc',fld='aeid', val=2033)) #MFR dn from Strickland et al.
+sc2.mea <- sc2.mea[dsstox_substance_id %in% mea.missing]
+
+sc2.mea$logc <- sc1.mea$logc[match(sc2.mea$spid, sc1.mea$spid)]
+
+add <-sc2.mea[,c('spid','chid','casn','chnm', 'dsstox_substance_id','aeid','aenm', 'bmad','max_med','hitc','logc','coff','resp_unit','conc_unit')]
+setnames(add, c('logc'), c('modl_acc')) # make the top tested concentration the potency
+add[, use.me := 0]
+add[hitc==1, use.me := 1]
+mc5.mea.test <- rbind(mc5.mea, add, use.names=TRUE, fill=TRUE)
+
+```
+
+
+## Total mc5 in ToxCast
+
+```{r, warning=FALSE, eval=FALSE}
+
+mc5.apcra <- mc5[dsstox_substance_id %in% apcra.list[,DTXSID]] # only APCRA chems
+mc5.apcra <- mc5.apcra[asnm != 'CCTE']
+
+stm.aeids <- unique(mc5.stm.test$aeid)
+mea.aeids <- unique(mc5.mea$aeid)
+mc5.apcra <- mc5.apcra[-(aeid %in% c(stm.aeids, mea.aeids))]
+mc5.stm.test[is.na(aenm) & aeid==1691, aenm := "STM_H9_OrnCyssISnorm_ratio_dn"]
+
+setdiff(colnames(mc5.apcra), colnames(mc5.mea))
+#colnames(mc5.mea)
+
+mega.mc5 <- rbind(mc5.apcra, mc5.mea, mc5.stm.test)
+
+mega.mc5 <- mega.mc5[dsstox_substance_id %in% apcra.list[,DTXSID]]
+
+mega.mc5.hitc1 <- mega.mc5[hitc==1]
+mega.mc5.hitc1[grep('_dn',aenm), direction := 'dn']
+
+mega.mc5.hitc1[asnm=='ATG' & direction=='dn', use.me := 0]
+mega.mc5.hitc1[use.me==0, hitc := 0]
+mega.mc5.hitc1 <- mega.mc5.hitc1[hitc==1] # this takes out ~1500 rows or so by removing the ATG _dn
+
+mega.mc5.hitc1[,modl_ga_5p := quantile(modl_ga, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id)]
+mega.mc5.hitc1[,asnm_modl_ga_5p := quantile(modl_ga, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id, asnm)]
+#unique(mega.mc5.hitc1$asnm) everything, 17 asid
+mega.mc5.hitc1[,ac50_5p := quantile(ac50_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id)]
+mega.mc5.hitc1[,asnm_ac50_5p := quantile(ac50_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id, asnm)]
+
+mega.mc5.hitc1[,modl_acc_5p := quantile(modl_acc, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id)]
+mega.mc5.hitc1[,asnm_modl_acc_5p := quantile(modl_acc, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id, asnm)]
+#unique(mega.mc5.hitc1$asnm) everything, 17 asid
+mega.mc5.hitc1[,acc_5p := quantile(acc_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id)]
+mega.mc5.hitc1[,asnm_acc_5p := quantile(acc_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id, asnm)]
+
+
+```
+## Make wide version
+
+* Minimum ACC potency by vendor/source included in case study.
+
+```{r, warning=FALSE, eval=FALSE}
+
+# CCTE is only Shafer acute data
+
+asnm.tnams <- dcast.data.table(mega.mc5.hitc1,
+                              chnm + dsstox_substance_id + modl_acc_5p ~ asnm,
+                              value.var = c('modl_acc'),
+                              fun.aggregate = min)
+
+for (j in 1:ncol(asnm.tnams)) set(asnm.tnams, which(is.infinite(asnm.tnams[[j]])), j, NA)
+
+asnm.tnams <- asnm.tnams[,c('chnm','dsstox_substance_id','modl_acc_5p','ATG','BSK','NVS','CCTE','STM')]
+
+```
+
+## Retrieve ER and AR model data
+
+```{r, warning=FALSE, eval=FALSE}
+
+cerapp <- as.data.table(dbGetQuery(con, "select model_generic_chemical_cerapp_score.*
+                                       from prod_internal_invitrodb_v3_5.model_generic_chemical_cerapp_score;"))
+
+compara <- as.data.table(dbGetQuery(con, "select model_generic_chemical_compara_scores.*
+                                         from prod_internal_invitrodb_v3_5.model_generic_chemical_compara_scores;"))
+
+er <- as.data.table(dbGetQuery(con, "select * from prod_internal_invitrodb_v3_5.model_generic_chemical_er_scores;"))
+ar <- as.data.table(dbGetQuery(con, "select * from prod_internal_invitrodb_v3_5.model_generic_chemical_ar_scores;"))
+hth295r <- as.data.table(dbGetQuery(con, "select * from prod_internal_invitrodb_v3_5.model_generic_chemical_hth295r_scores;"))
+
+```
+ 
+* Save RData file.
+ 
+```{r,warning=FALSE, eval=FALSE}
+
+save(apcra.list,
+     asnm.tnams,
+     cerapp,
+     compara,
+     er,
+     ar,
+     hth295r,
+     mega.mc5,
+     mega.mc5.hitc1,
+     sc2.stm,
+     file='./source/invitrodb_apcra_pro_invitrodb3_5_2023.RData')
+
+```
+
+```{r, warning=FALSE}
+load('./source/in_vitro/tier1_NAMs_apcra_pro_04032023.RData')
+```
+
+# Step 3: Add Broad Profiling NAMs {.tabset .tabset-fade .tabset-pills}
+
+* Add HTTr and HTPP summary bioactivity values to ToxCast data for case study.
+
+## Merge with HTTr and HTPP
+
+* Load HTTr POD data
+* 3 chemicals missing in table below
+
+```{r, warning=FALSE, eval=FALSE}
+# load in HTTr data
+
+#httr.pod <- as.data.table(read.xlsx('./source/podAcrossDomains 2021-04-01.xlsx', sheet=1,colNames = TRUE))
+#httr.pod.apcra <- httr.pod[dtxsid %in% apcra.pro$dsstox_substance_id]
+#write.xlsx(httr.pod.apcra, "./source/HTTr_podAcrossDomains 2021-04-01.xlsx")
+
+#RSJ advises to use pod_sig
+
+httr.u2os <- as.data.table(read.xlsx('./source/super_target_boxplot_U2OS_u2os_toxcast_pfas_pe1_normal_v2_screen_large_gsea_0.9_1_3_summary.xlsx', sheet=1, colNames=TRUE))
+
+
+
+httr.mcf7 <- as.data.table(read.xlsx('./source/super_target_boxplot_MCF7_mcf7_ph1_pe1_normal_block_123_allPG_screen_large_gsea_0.9_1_3_summary.xlsx', sheet=1, colNames=TRUE))
+
+httr.heparg <- as.data.table(read.xlsx('./source/super_target_boxplot_HepaRG_heparg2d_toxcast_pfas_pe1_normal_screen_large_gsea_0.9_1_3_summary.xlsx', sheet=1, colNames=TRUE))
+
+colnames(httr.u2os)
+
+setnames(httr.u2os, c('pod_sig'), c('httr.u20s.pod.sig'))
+setnames(httr.mcf7, c('pod_sig'), c('httr.mcf7.pod.sig'))
+setnames(httr.heparg, c('pod_sig'), c('httr.heparg.pod.sig'))
+
+httr.u2os <- httr.u2os[, .SD[which.min(httr.u20s.pod.sig)], by='dtxsid']
+httr.mcf7 <- httr.mcf7[, .SD[which.min(httr.mcf7.pod.sig)], by='dtxsid']
+httr.heparg <- httr.heparg[, .SD[which.min(httr.heparg.pod.sig)], by='dtxsid']
+
+httr.pod <- merge.data.table(httr.u2os[,c('name','dtxsid','httr.u20s.pod.sig')],
+                             httr.mcf7[,c('dtxsid','httr.mcf7.pod.sig')],
+                             by=c('dtxsid'),
+                             all.x=TRUE,
+                             all.y=TRUE)
+
+httr.pod <- merge.data.table(httr.pod,
+                             httr.heparg[,c('dtxsid','httr.heparg.pod.sig')],
+                             by=c('dtxsid'),
+                             all.x=TRUE,
+                             all.y=TRUE)
+
+
+httr.pod <- httr.pod[dtxsid %in% apcra.list[,DTXSID]]
+diff <- setdiff(apcra.list$DTXSID, httr.pod$dtxsid)
+apcra.list[DTXSID %in% diff]
+apcra.list[,httr.any := 1]
+apcra.list[DTXSID %in% diff, httr.any := 0]
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+#dput(colnames(httr.pod))
+asnm.tier1 <- merge.data.table(asnm.tnams,
+                               httr.pod[,c('dtxsid','httr.u20s.pod.sig', 'httr.mcf7.pod.sig', 'httr.heparg.pod.sig')], 
+                               by.x=c('dsstox_substance_id'),
+                               by.y=c('dtxsid'))
+```
+
+* Load HTPP data
+* HTPP is from Johanna Nyffeler, Sept 2020
+
+```{r, warning=FALSE, eval=FALSE}
+
+# get HTPP data
+# using the minimum PAC from global and category level analysis of the new U2OS screen.
+# filter imposed: hit==1 if continuous hitcall >0.5
+
+load(file='./source/U2OS_ToxCast htpp_pac APCRA_pro chemicals.RData')
+PACList <- as.data.table(PACList)
+
+# unique(PACList$approach)
+# pac = potency in log10-uM
+# hit = binary hitcall
+# hitcall = hitcall probability
+# top_over_cutoff = estimate of effect size
+
+PACList.apcra = PACList %>%
+  filter(dtxsid %in% apcra.list$DTXSID)
+
+#length(unique(PACList.apcra$dtxsid)) # 194 screened
+
+PACList.apcra[,htpp.min := ifelse(!is.na(pac), min(pac, na.rm=TRUE), 1000), by=list(dtxsid)]
+
+htpp.hitc1 <- unique(PACList.apcra[hit==1, c('dtxsid','casrn','chem_name','htpp.min','hit','hitcall')]) #152 out of 194
+
+apcra.list[DTXSID %in% PACList.apcra$dtxsid, htpp.u2os :=1]
+
+asnm.tier1$htpp.u2os.pac.min <- htpp.hitc1$htpp.min[match(asnm.tier1$dsstox_substance_id,
+                                                            htpp.hitc1$dtxsid)]
+
+```
+
+* Load in ASTAR
+
+```{r, warning=FALSE, eval=FALSE}
+
+#load('./source/APCRA2_Astar_summary_210214.Rdata')
+load('./source/APCRA2_Astar_final_210530.Rdata')
+#APCRA_Astar <- as.data.table(APCRA_Astar)
+APCRA_Astar <- as.data.table(Astar_HIPPTox)
+
+astar.samples <- tcplLoadChem(field='spid',val=unique(APCRA_Astar$EPA_SAMPLE_ID)) # have to be connected to invitrodb
+
+APCRA_Astar$dsstox_substance_id <- astar.samples$dsstox_substance_id[match(APCRA_Astar$EPA_SAMPLE_ID,
+                                                                           astar.samples$spid)]
+
+asnm.tier1$Astar_BEAS2B_final <- APCRA_Astar$Astar_BEAS2B_final[match(asnm.tier1$dsstox_substance_id,
+                                                                     APCRA_Astar$dsstox_substance_id)]
+
+asnm.tier1$Astar_HepG2_final <- APCRA_Astar$Astar_HepG2_final[match(asnm.tier1$dsstox_substance_id,
+                                                                     APCRA_Astar$dsstox_substance_id)]
+asnm.tier1$Astar_HK2_final <- APCRA_Astar$Astar_HK2_final[match(asnm.tier1$dsstox_substance_id,
+                                                                     APCRA_Astar$dsstox_substance_id)]
+
+# edit 2-26-24, per Lit-Hsin Loo, values of 2.6 and greater indicate a negative response in the assay
+#nrow(asnm.tier1[Astar_BEAS2B_final>2.6]) #100 times
+asnm.tier1[Astar_BEAS2B_final> 2.6, Astar_BEAS2B_final := NA]
+asnm.tier1[Astar_HepG2_final> 2.6, Astar_HepG2_final := NA]
+asnm.tier1[Astar_HK2_final> 2.6, Astar_HK2_final := NA]
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+asnm.tier1[,c('httr.u20s.pod.sig', 'httr.mcf7.pod.sig', 'httr.heparg.pod.sig')] <- log10(asnm.tier1[,c('httr.u20s.pod.sig', 'httr.mcf7.pod.sig', 'httr.heparg.pod.sig')])
+
+asnm.tier1[,min.acc.targeted.nam := min(ATG,BSK,NVS,CCTE,STM, na.rm = TRUE), by=list(dsstox_substance_id)]
+
+```
+
+## Compare to modl_acc 5th percentile
+
+```{r, warning=FALSE, eval=FALSE}
+
+
+asnm.tier1[, col_min := colnames(.SD)[apply(.SD,1,which.min)], .SDcols=c('ATG','BSK','NVS','CCTE','STM',
+                                                                         'httr.u20s.pod.sig', 'httr.mcf7.pod.sig', 'httr.heparg.pod.sig',
+                                                                         'htpp.u2os.pac.min',
+                                                                         "Astar_HK2_final", "Astar_HepG2_final","Astar_BEAS2B_final")]
+
+asnm.tier1[, min.httr.htpp.targetnams := min(ATG,BSK,NVS,CCTE,STM, httr.u20s.pod.sig, httr.mcf7.pod.sig, httr.heparg.pod.sig,htpp.u2os.pac.min,Astar_HK2_final, Astar_HepG2_final,Astar_BEAS2B_final, na.rm=TRUE), by=list(dsstox_substance_id)]
+
+```
+
+
+```{r, warning=FALSE}
+
+fig2b <- ggplot(data=asnm.tier1[,.(count=.N), by=col_min], aes(x=reorder(col_min,(-count)),y=count))+
+  geom_bar(stat='identity')+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=45, vjust=0.6, size=12),
+        axis.text.y = element_text(size=14),
+        axis.title = element_text(size=16))+
+  xlab('Min potency NAM')+
+  #ggtitle('Frequency of Minimum Value by DTXSID')+
+  scale_x_discrete(breaks=c('NVS', 'BSK','ATG','CCTE','httr.u20s.pod.sig', 'STM',
+                               'htpp.u2os.pac.min', 'httr.mcf7.pod.sig'),
+                   labels = c('NVS', 'BioMAP','ATG','CCTE-MEA','HTTr U2OS', 'STM',
+                               'HTPP U2OS', 'HTTr MCF7'))
+
+fig2b
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/Fig2b_invitro_mostpotent_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=6, height=4, units='in', res=600)
+fig2b
+dev.off()
+
+```
+
+## Heatmap of data and coverage
+
+* Need to make missing data a different value from negative data
+* Need to annotate analytical quality control pass/fail (AQC)
+* Need to annotate APCRA Pro Only (or not)
+
+```{r, warning=FALSE}
+
+# asnm.tier1 is all in arithmetic units and this is not conducive to heatmapping
+asnm.tier1.loguM <- as.data.frame(asnm.tier1)
+cols <- c("ATG", 
+                         "BSK",
+                          "CCTE",
+                         "NVS", 
+                         "STM",
+                         "httr.u20s.pod.sig",
+                         "httr.mcf7.pod.sig",
+                         "httr.heparg.pod.sig",
+                         "htpp.u2os.pac.min",
+                         "Astar_BEAS2B_final",
+                         "Astar_HepG2_final",
+                         "Astar_HK2_final")
+
+# put numeric column values into log10 uM
+
+asnm.tier1.loguM[cols] <- lapply(asnm.tier1.loguM[cols], log10) 
+
+asnm.tier1.loguM <- as.data.table(asnm.tier1.loguM)
+setnames(asnm.tier1.loguM, c('CCTE', 'BSK'), c('CCTE-MEA', 'BioMAP'))
+
+# make matrix for heatmap
+mat <- asnm.tier1.loguM[,c("dsstox_substance_id", 
+                         #"CASRN",
+                         "chnm",
+                         "ATG", 
+                         "BioMAP",
+                         "CCTE-MEA",
+                         "NVS", 
+                         "STM",
+                         "httr.u20s.pod.sig",
+                         "httr.mcf7.pod.sig",
+                         "httr.heparg.pod.sig",
+                         "htpp.u2os.pac.min",
+                         "Astar_BEAS2B_final",
+                         "Astar_HepG2_final",
+                         "Astar_HK2_final" 
+                         )]
+
+```
+
+* the targeted NAM matrix is not complete.
+* CCTE-MEA = 133/201
+* NVS = 166/201 - but 200/201 covered in sc
+* BSK = 200/201
+* ATG = 187/201
+
+```{r, warning=FALSE}
+
+length(unique(mega.mc5[asnm=='NVS']$dsstox_substance_id)) #166
+length(unique(mega.mc5[asnm=='TOX21']$dsstox_substance_id)) #198
+length(unique(mega.mc5[asnm=='BSK']$dsstox_substance_id)) #200
+length(unique(mega.mc5[asnm=='ATG']$dsstox_substance_id)) #187
+length(unique(mega.mc5[asnm=='CCTE']$dsstox_substance_id)) #133 # no single conc data released
+```
+
+* Need to annotate for this incompleteness
+
+```{r hm-matrix, warning=FALSE}
+
+mat$aqc <- ad.tbl$aqc_indicator[match(mat$dsstox_substance_id,ad.tbl$DTXSID)]
+mea.tested.dtxsid <- unique(mega.mc5[asnm=='CCTE']$dsstox_substance_id)
+mat2 <- mat[!dsstox_substance_id %in% mea.tested.dtxsid, `CCTE-MEA` := 5]
+atg.tested.dtxsid <- unique(mega.mc5[asnm=='ATG']$dsstox_substance_id)
+mat2 <- mat2[!dsstox_substance_id %in% atg.tested.dtxsid, `ATG` := 5]
+
+mat2 <- mat2 %>% mutate_all(function(x) ifelse(is.nan(x), NA, x))
+mat2 <- mat2[order(aqc, `CCTE-MEA`, ATG)]
+mat3 <- mat2[,lapply(.SD, function(x){ifelse(is.na(x),6,x)}), .SDcol=c(3:14)]
+mat3 <- mat3 %>% mutate_all(function(x) ifelse(x==5, NA, x))
+mat3 <- mat3 %>% mutate_all(function(x) ifelse(is.infinite(x), NA, x))
+
+matrix <- as.matrix(mat3)
+rownames(matrix) <- mat2[,dsstox_substance_id]
+```
+
+```{r annotation-full, warning=FALSE}
+
+# Make Complex Heatmap
+
+## define the annotations df
+
+anno_df <- data.frame(rownames(matrix))
+
+# add whether it is APCRA Pro Only and if it is in applicability domain for screening and chemical name
+anno_df$Pro <- ad.tbl$apcra.pro.only[match(anno_df[,1],
+                                            ad.tbl$DTXSID)] # 1 means APCRA pro only
+anno_df$chnm <- ad.tbl$preferred_name[match(anno_df[,1],
+                                            ad.tbl$DTXSID)] # match in preferred name
+anno_df$aqc <- ad.tbl$aqc_indicator[match(anno_df[,1],
+                                          ad.tbl$DTXSID)] # 1 means pass AQC
+
+colors_ha <- list(Pro = c('0'='white','1'='blue'),
+                  AQC = c('0'='white', '1'='black'))
+
+#row_ha <- rowAnnotation(min_nam = anno_text(anno_df$min_nam,
+#                                               just='left',
+#                                               show_name = FALSE))
+
+
+#row_ha <- rowAnnotation(Pro = anno_simple(anno_df$Pro,
+#                                          col = c('0'='white','1'='black')))
+
+row_ha <- rowAnnotation(AQC = anno_df$aqc,
+                        Pro = anno_df$Pro,
+                        col = colors_ha,
+                        border=TRUE,
+                        annotation_name_side = c('top','top'))
+```
+
+```{r complex-hm, warning=FALSE}
+# define colors for main heatmap
+
+col_fun = colorRamp2(c(-2, 0, 2, 6), c('#F0F921FF','#E16462FF','#0D0887FF', 'gray'))
+#col_fun(seq(-2, 3))
+
+## heatmap
+
+test_fig <- Heatmap(matrix = matrix, 
+                       cluster_columns = FALSE,
+                       cluster_rows=FALSE,
+                       name="log10-uM",
+                       col=col_fun,
+                       na_col='white',
+                       #col= colors,
+                       #col = colorRamp2(breaks = c(1, 0),
+                       #                  colors = c("#2166ac", "#f7f7f7")),
+                       #col = list(type=c("1" = "#2166ac","0"= "#f7f7f7")),
+                       show_row_names = FALSE, 
+                       #row_dend_width = unit(3, "cm"),
+                       column_names_max_height = unit(8, "cm"),
+                       column_names_gp = gpar(fontsize = 10),
+                       #clustering_method_columns = "ward.D",
+                       #clustering_method_rows = "ward.D",
+                    show_column_dend = FALSE,
+                    show_row_dend = FALSE,
+                       #clustering_distance_rows = "euclidean",
+                       #clustering_distance_columns = "euclidean",
+                       #show_row_dend = TRUE,
+                       #show_column_dend = TRUE,
+                       heatmap_legend_param = list(title = "log10-uM",
+                                                   legend_direction = 'horizontal'),
+                      
+                      width=unit(6,'cm'),
+                       height = unit(14, 'cm'),
+                       rect_gp = gpar(col = "white", lwd = 0.25),
+                       column_names_side='top',
+                    right_annotation = row_ha)
+
+## final heatmap output
+
+hm_invitro <- draw(test_fig,  heatmap_legend_side='bottom')
+```
+
+```{r, warning=FALSE}
+
+## Make ComplexHeatmap zoom
+mat4 <- mat2[aqc==0]
+mat5 <- mat4[,lapply(.SD, function(x){ifelse(is.na(x),6,x)}), .SDcol=c(3:14)]
+mat5 <- mat5 %>% mutate_all(function(x) ifelse(x==5, NA, x))
+mat5 <- mat5 %>% mutate_all(function(x) ifelse(is.infinite(x), NA, x))
+
+matrix2 <- as.matrix(mat5)
+mat4[,chnm := str_trunc(chnm, 40, "right")]
+rownames(matrix2) <- mat4[,chnm]
+```
+
+```{r, warning=FALSE}
+
+anno_df2 <- data.frame(rownames(matrix2))
+
+# add whether it is APCRA Pro Only and if it is in applicability domain for screening and chemical name
+anno_df2$DTXSID <- mat4$dsstox_substance_id[match(anno_df2[,1],
+                                                 mat4$chnm)]
+anno_df2$Pro <- ad.tbl$apcra.pro.only[match(anno_df2$DTXSID,
+                                            ad.tbl$DTXSID)] # 1 means APCRA pro only
+anno_df2$chnm <- ad.tbl$preferred_name[match(anno_df2$DTXSID,
+                                            ad.tbl$DTXSID)] # match in preferred name
+anno_df2$aqc <- ad.tbl$aqc_indicator[match(anno_df2$DTXSID,
+                                          ad.tbl$DTXSID)] # 1 means pass AQC
+
+colors_ha <- list(Pro = c('0'='white','1'='blue'),
+                  AQC = c('0'='white', '1'='black'))
+
+#row_ha <- rowAnnotation(min_nam = anno_text(anno_df$min_nam,
+#                                               just='left',
+#                                               show_name = FALSE))
+
+
+#row_ha <- rowAnnotation(Pro = anno_simple(anno_df$Pro,
+#                                          col = c('0'='white','1'='black')))
+
+row_ha <- rowAnnotation(AQC = anno_df2$aqc,
+                        Pro = anno_df2$Pro,
+                        col = colors_ha,
+                        border=TRUE,
+                        annotation_name_side = c('top','top'))
+```
+
+```{r complex-hm2, warning=FALSE}
+# define colors for main heatmap
+
+col_fun = colorRamp2(c(-2, 0, 2, 6), c('#F0F921FF','#E16462FF','#0D0887FF', 'gray'))
+#col_fun(seq(-2, 3))
+
+## heatmap
+
+test_fig2 <- Heatmap(matrix = matrix2, 
+                       cluster_columns = FALSE,
+                       cluster_rows=FALSE,
+                       name="log10-uM",
+                       col=col_fun,
+                       na_col='white',
+                       #col= colors,
+                       #col = colorRamp2(breaks = c(1, 0),
+                       #                  colors = c("#2166ac", "#f7f7f7")),
+                       #col = list(type=c("1" = "#2166ac","0"= "#f7f7f7")),
+                       show_row_names = TRUE, 
+                       #row_dend_width = unit(3, "cm"),
+                       column_names_max_height = unit(8, "cm"),
+                       column_names_gp = gpar(fontsize = 10),
+                     row_names_gp=gpar(fontsize=8),
+                       #clustering_method_columns = "ward.D",
+                       #clustering_method_rows = "ward.D",
+                    show_column_dend = FALSE,
+                    show_row_dend = FALSE,
+                       #clustering_distance_rows = "euclidean",
+                       #clustering_distance_columns = "euclidean",
+                       #show_row_dend = TRUE,
+                       #show_column_dend = TRUE,
+                       heatmap_legend_param = list(title = "log10-uM",
+                                                   legend_direction = 'horizontal'),
+                      
+                      width=unit(7,'cm'),
+                       height = unit(6, 'cm'),
+                       rect_gp = gpar(col = "white", lwd = 0.25),
+                       column_names_side='top',
+                    right_annotation = row_ha)
+
+## final heatmap output
+
+hm_invitro_zoom <- draw(test_fig2,  heatmap_legend_side='bottom')
+```
+
+```{r, warning=FALSE, fig.width=6, fig.height=6}
+
+p1 = grid.grabExpr(draw(test_fig,  heatmap_legend_side='bottom'))
+p2 = grid.grabExpr(draw(test_fig2,  heatmap_legend_side='bottom'))
+```
+
+```{r, warning=FALSE}
+
+asnm.tier1.long <- melt.data.table(asnm.tier1,
+                           id.vars = c('chnm','dsstox_substance_id'),
+                           measure.vars = c('min.acc.targeted.nam','min.httr.htpp.targetnams', 'modl_acc_5p'),
+                           variable.name = c('min_nam_type'),
+                           value.name = c('pod_log10uM'))
+                          
+d <- ggplot(data=asnm.tier1.long, 
+                       aes(x=pod_log10uM,
+                           fill=min_nam_type))+
+  geom_histogram(position='identity',binwidth = 0.33, alpha=0.5)+
+  scale_x_continuous(breaks=seq(-5,10,1))+
+  scale_fill_viridis(name='', 
+                     discrete=TRUE, 
+                     labels=c('min targeted',
+                              'min broad',
+                              '5th %-ile ToxCast'),
+                     breaks=c('min.acc.targeted.nam',
+                              'min.httr.htpp.targetnams',
+                              'modl_acc_5p'))+
+  #scale_color_viridis(discrete=TRUE)+
+  theme_bw()+
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14))+
+  xlab("Min in vitro potency")+
+  ylab("count")+
+  theme(legend.position = 'bottom')
+
+
+
+```
+
+```{r, warning=FALSE, fig.width=10, fig.height=6}
+fig3 <- ggdraw()+
+  #draw_plot(p1,     0,  0,   0.5, 1)+
+  #draw_plot(p2,    0.5, 0.3,0.4, 0.7)+
+  #draw_plot(fig2b, 0.5, 0.1, 0.4, 0.3)+
+  #draw_plot_label(c('A','B','C'), c(0, 0.4,0.4), 
+  #                c(0.8, 0.8, 0.45), size=16)
+  draw_plot(p1, x=0,   y=0,  width=0.5, height=1)+
+  draw_plot(p2, x=0.5, y=0.3,width=0.4, height=1)+
+  draw_plot(d, x=0.5,  y=0.3,width=0.4, height=0.3)+
+  draw_plot(fig2b, x=0.5, y=0, width=0.4, height=0.3)+
+  
+  draw_plot_label(c('A','B','C','D'), c(0.05, 0.4,0.45, 0.45), 
+                  c(0.75, 0.9, 0.6, 0.3), size=16)
+fig3
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/Fig3_in_vitro_results_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=10, height=12, units='in', res=450)
+fig3
+dev.off()
+
+
+
+```
+
+
+
+
+
+```{r, warning=FALSE, eval=FALSE}
+# add the tier 1 file to the data
+
+save(apcra.list,
+     cerapp,
+     compara,
+     er,
+     ar,
+     hth295r,
+     mega.mc5,
+     mega.mc5.hitc1,
+     sc2.stm,
+     httr.pod,
+     PACList.apcra,
+     asnm.tier1,
+     file='./source/in_vitro/tier1_NAMs_apcra_pro_02262024.RData')
+```
+
+## Additional investigations of in vitro potency
+
+```{r, warning=FALSE}
+
+
+asnm.tier1.long <- melt.data.table(asnm.tier1,
+                           id.vars = c('chnm','dsstox_substance_id','modl_acc_5p'),
+                           measure.vars = c('httr.u20s.pod.sig', 'httr.mcf7.pod.sig', 'httr.heparg.pod.sig',
+                                            'htpp.u2os.pac.min',
+                                            'min.acc.targeted.nam','min.httr.htpp.targetnams',
+                                            "Astar_HK2_final", "Astar_HepG2_final","Astar_BEAS2B_final" ),
+                           variable.name = c('nam_type'),
+                           value.name = c('pod_log10uM'))
+                          
+
+```
+
+```{r, warning=FALSE, fig.width=12, fig.height=9, dpi=450}
+
+suppfig1 <- ggplot(data=asnm.tier1.long) +
+  geom_point(data=asnm.tier1.long,
+             aes(x=modl_acc_5p,
+                 y=pod_log10uM), size=2)+ 
+  #scale_y_log10(limits=c(10^-3,10^2),
+   #             breaks = scales::trans_breaks("log10", function(x) 10^x),
+    #            labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  #scale_x_log10(limits=c(10^-3,10^2),
+   #             breaks = scales::trans_breaks("log10", function(x) 10^x),
+    #            labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  geom_abline(slope=1, intercept=0) +
+  geom_abline(slope=1, intercept=0.5, linetype="dashed") +
+  geom_abline(slope=1, intercept=-0.5, linetype="dashed")+
+  theme_bw()+
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12))+
+  facet_wrap(~nam_type)+
+  xlab('5th %-ile ToxCast ACC')+
+  #ylab('HTTr, 5th percentile BMD')+
+  theme(strip.text = element_text(size=14, face='bold'))
+
+suppfig1
+
+```
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/SuppFig1_in_vitro_results_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=8, height=8, units='in', res=600)
+suppfig1
+dev.off()
+
+
+
+```
+```{r, warning=FALSE}
+
+min.model <- lm(modl_acc_5p ~ min.httr.htpp.targetnams, 
+            data= asnm.tier1)
+
+summary(min.model)
+
+sqrt(mean(min.model$residuals^2))
+```
+
+```{r, warning=FALSE}
+
+# matrix is very sparse
+# fill in 1000 for remaining NAs
+for (j in seq_along(names(asnm.tier1))) {
+  set(asnm.tier1,
+      i = which(is.na(asnm.tier1[[j]])),
+      j = j, 
+      value = 3)
+}
+
+```
+
+## Model 1:Targeted NAMs only
+
+```{r, warning=FALSE}
+acc.model <- lm(modl_acc_5p ~ ATG + BSK + CCTE + NVS + STM, 
+            data= asnm.tier1)
+
+summary(acc.model)
+```
+
+
+```{r, warning=FALSE, eval=FALSE, echo=FALSE}
+
+set.seed(12345678)
+training.samples <- asnm.tier1$modl_acc_5p%>% createDataPartition(p=0.8, list=FALSE)
+train.data <- asnm.tier1[training.samples,]
+test.data <- asnm.tier1[-training.samples,]
+
+acc.model <- lm(modl_acc_5p ~ ATG + BSK + CCTE + NVS + STM, 
+            data= train.data)
+
+summary(acc.model)
+predictions <- acc.model %>% predict(test.data)
+target.rmse <- round(RMSE(predictions,test.data$modl_acc_5p),3) #RMSE, prediction #1.194
+target.r2 <- round(R2(predictions,test.data$modl_acc_5p),3) #R2, prediction 0.071
+
+```
+
+
+```{r, warning=FALSE, eval=FALSE, echo=FALSE}
+
+pred.tbl <- as.data.table(predictions) #36 obs (training is 160)
+test.data$predictions <- predictions
+
+ggplot(data=test.data, aes(x=modl_acc_5p, y=predictions))+
+geom_point(size=2)+ 
+  annotate("text", y=0.5,x=-3,label=paste0("RMSE= ",target.rmse), size=4, color='dark green')+
+  annotate("text", y=0.35, x=-3, label=paste0("R2= ",target.r2), size=4, color='dark green')+
+  #geom_text(angle=90, vjust=-1, hjust=0.5)+
+  #geom_text_repel(max.overlaps = 100)+
+  xlab('5th %-ile ToxCast ACC') +
+  ylab('Minimal Set Prediction (ATG,BSK,CCTE,NVS,STM)') +
+  geom_abline(slope=1, intercept=0) +
+  geom_abline(slope=1, intercept=1/2, linetype="dashed") +
+  geom_abline(slope=1, intercept=-1/2, linetype="dashed") +
+  theme_bw()
+
+```
+
+## Model 2:Targeted NAMs + Tier 1 NAMs
+```{r, warning=FALSE}
+
+set.seed(12345678)
+training.samples <- asnm.tier1$modl_acc_5p%>% createDataPartition(p=0.8, list=FALSE)
+train.data <- asnm.tier1[training.samples,]
+test.data <- asnm.tier1[-training.samples,]
+#dput(colnames(asnm.tier1))
+acc.model <- lm(modl_acc_5p ~ ATG + BSK + CCTE + NVS + STM + httr.u20s.pod.sig + httr.mcf7.pod.sig + httr.heparg.pod.sig +  htpp.u2os.pac.min, 
+            data= train.data)
+
+summary(acc.model)
+predictions <- acc.model %>% predict(test.data)
+RMSE(predictions,test.data$modl_acc_5p) #RMSE, prediction #1.19
+R2(predictions,test.data$modl_acc_5p) #R2, prediction 0.24
+
+```
+
+```{r, warning=FALSE, eval=FALSE, echo=FALSE}
+
+pred.tbl <- as.data.table(predictions) #36 obs (training is 160)
+test.data$predictions <- predictions
+
+ggplot(data=test.data, aes(x=modl_acc_5p, y=predictions))+
+geom_point(size=2)+ 
+  #geom_text(angle=90, vjust=-1, hjust=0.5)+
+  #geom_text_repel(max.overlaps = 100)+
+  xlab('5th %-ile ToxCast ACC') +
+  ylab('HTTr, HTPP, and Targeted NAMs') +
+  geom_abline(slope=1, intercept=0) +
+  geom_abline(slope=1, intercept=1/2, linetype="dashed") +
+  geom_abline(slope=1, intercept=-1/2, linetype="dashed") +
+  theme_bw()
+
+```
+

@@ -1,0 +1,777 @@
+---
+title: "3 ToxVal Data Compilation"
+author: "Katie Paul Friedman"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    collapsed: yes
+    df_print: paged
+    lightbox: no
+    number_sections: yes
+    self_contained: yes
+    thumbnails: no
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE}
+library(caret)
+library(cowplot)
+library(data.table)
+library(DescTools)
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(ggrepel)
+library(ggstance)
+library(gplots)
+library(httk)
+library(kableExtra)
+library(jtools)
+library(openxlsx)
+library(plotly)
+library(randomForest)
+library(RMySQL)
+library(tidyr)
+library(tcpl)
+library(viridis)
+```
+
+```{r, echo=FALSE, eval=FALSE}
+
+con <- dbConnect(drv = RMySQL::MySQL(), user="_dataminer", #fill user
+                 password = "pass", # fill pass
+                 host = "ccte-mysql-res.epa.gov", 
+                 #database = dev_toxval_v9_1)
+                 database= res_toxval_v94)
+```
+
+# Load Data {.tabset .tabset-fade .tabset-pills}
+
+```{r load-apcra-list, warning=FALSE}
+
+apcra.pro <- fread('./source/chem/apcra_pro.csv') # APCRA prospective chemicals
+apcra.pro[,c(1) := NULL]
+setnames(apcra.pro, c('V2','V3','V4'), c('DTXSID','CASRN','preferred_name'))
+apcra.pro <- apcra.pro[-c(1),]
+apcra.pro[,list := 'Pro']
+
+# annotate chemicals that are also in APCRA retrospective case study - these will likely be data-rich
+apcra.ret <- as.data.table(read.xlsx('./source/chem/Supp_File_2_pod_ratio_master_final.xlsx', sheet=1)) 
+apcra.pro[,apcra.ret := 0]
+apcra.ret.dtxsids <- apcra.ret[,DTXSID]
+apcra.pro[DTXSID %in% apcra.ret.dtxsids, apcra.ret := 1]
+
+```
+
+```{r load-toxval-94, warning=FALSE, eval=FALSE}
+toxval_v9_4 <- dbGetQuery(con, "SELECT * FROM res_toxval_v94.toxval INNER JOIN
+                          res_toxval_v94.chemical ON toxval.dtxsid=chemical.dtxsid INNER JOIN
+                          res_toxval_v94.species ON toxval.species_id=species.species_id;") %>% as.data.table()
+
+toxval_v9_4 <- toxval_v9_4[dtxsid %in% apcra.pro[,DTXSID]]
+save(toxval_v9_4, file='./source/toxval_v9_4_apcra_pro_full.RData')
+```
+
+# Refine the toxval data {.tabset .tabset-fade .tabset-pills}
+
+## Human Health
+
+* Select qc_status=='pass'
+* Reduce to studies for human health.
+
+```{r, warning=FALSE}
+load(file='./source/toxval_v9_4_apcra_pro_full.RData')
+```
+
+```{r qc-status-hhra, warning=FALSE}
+table(toxval_v9_4$qc_status)
+#toxval.apcra <- toxval_v9_1[qa_status==1]
+toxval.apcra <- toxval_v9_4[qc_status=='pass']
+
+colnames(toxval.apcra)
+head(toxval.apcra)
+#table(toxval.apcra$species_supercategory)
+table(toxval.apcra$human_eco)
+toxval.apcra <- toxval.apcra[human_eco=='human health']
+
+```
+
+```{r select-ra-class, warning=FALSE}
+
+table(toxval.apcra$risk_assessment_class)
+toxval.apcra <- toxval.apcra[risk_assessment_class %in% c('chronic',
+                                                          'developmental',
+                                                          'Hershberger',
+                                                          'immunotoxicity',
+                                                          'neurotoxicity',
+                                                          'neurotoxicity short-term',
+                                                          'neurotoxicity subchronic',
+                                                          'repeat dose other',
+                                                          'reproduction',
+                                                          'reproduction developmental',
+                                                          'short-term',
+                                                          'subchronic',
+                                                          'uterotrophic')]
+
+```
+
+```{r select-species, warning=FALSE}
+
+table(toxval.apcra$common_name)
+
+```
+* After some inspection it seemed ECOTOX and DOE Wildlife Benchmarks were adding a lot of additional terrestrial species from ecotoxicology.
+* However removing these sources would also remove studies from 'Rat' so these seemingly should not be omitted
+
+```{r, warning=FALSE}
+
+toxval.apcra[source %in% c('DOE Wildlife Benchmarks',
+                           'ECOTOX')]
+
+
+```
+* Unique listing of species suggests ecotox terrestrial species. 
+
+```{r, warning=FALSE}
+
+
+unique(toxval.apcra$common_name)
+
+```
+* Based on explicitly specifying species, this is what we are left with in the dataset.
+
+```{r specify-species, warning=FALSE}
+toxval.apcra <- toxval.apcra[common_name %in% c('Human (RA)',
+                                                'Human',
+                                                'Rat',
+                                                'Mouse',
+                                                'Rabbit',
+                                                'Dog',
+                                                'Rabbit, Rat',
+                                                'European Rabbit',
+                                                'Mouse, Rat',
+                                                'Black Rat',
+                                                'Monkey',
+                                                'Hamster',
+                                                'Guinea Pig',
+                                                'Dog, Rat')]
+
+table(toxval.apcra$common_name)
+```
+* Curious how the human data come to be
+* Looks like these are generally specific PPRTV or RfD values
+* Can divide these out later as these are probably not fit for comparison to PODs as they are pre-adjusted values (for uncertainty)
+
+```{r what-human, warning=FALSE}
+
+toxval.apcra[common_name %in% c('Human','Human (RA)')]
+
+```
+
+
+## Repeat exposures 
+
+* How do we want to refine? 
+* This case study is about repeat exposures, so drop acute and select repeat dose studies.
+
+```{r, warning=FALSE}
+
+table(toxval.apcra$study_type)
+#unique(toxval.apcra$study_type)
+
+toxval.apcra <- toxval.apcra[study_type %in% c('chronic',
+                                               'short-term',
+                                               'subchronic',
+                                               'noncancer',
+                                               'developmental',
+                                               'repeat dose other',
+                                               'reproduction',
+                                               'neurotoxicity',
+                                               'immunotoxicity',
+                                               'uterotrophic',
+                                               'neurotoxicity short-term',
+                                               'Hershberger',
+                                               'reproduction developmental',
+                                               'neurotoxicity subchronic'
+                                              )]
+unique(toxval.apcra$study_type)
+```
+
+## Units
+
+* Make sure the toxval_type and units are interpretable for our case study.
+* Include oral exposures
+* Keep the reference dose (RfD) for now, out of interest (can be dropped later for interpretation).
+
+### Exposure Route
+
+```{r, warning=FALSE}
+
+table(toxval.apcra[,c('exposure_method','exposure_route')])
+
+```
+* Sometimes the "-" exposure route is % in diet
+
+```{r, warning=FALSE}
+
+table(toxval.apcra[exposure_route=='-', c('exposure_route','exposure_method_original')])
+
+
+```
+* Included exposure routes that were oral or '-' - the units appeared generally interpretable a oral even when route was '-'
+
+```{r exposure-method-filter, warning=FALSE}
+
+toxval.apcra <- toxval.apcra[exposure_route %in% c('-',
+                                                   'oral')]
+
+toxval.apcra[exposure_route=='-' & exposure_method %in% c('-')]
+```
+
+### Dose
+
+* Examine the units on dose.
+```{r, warning=FALSE}
+
+table(toxval.apcra$toxval_units)
+
+```
+
+* First pass filter on dose units
+
+```{r, warning=FALSE}
+
+toxval.apcra <- toxval.apcra[toxval_units %in% c('%',
+                                                 '% diet',
+                                                 '(mg/kg-day)-1',
+                                                 'g/ kg bdwt/d',
+                                                 'g/L',
+                                                 'mg/kg',
+                                                 'mg/kg-day',
+                                                 'mg/kg diet',
+                                                 'mg/kg diet/d',
+                                                 'ppb diet',
+                                                 'ppm',
+                                                 'ug/kg bdwt',
+                                                 'ug/kg bdwt/d')]
+
+table(toxval.apcra$toxval_units)
+
+```
+* Convert all preserved units on dose to mg/kg-bw/day.
+* species with ppm
+
+```{r, warning=FALSE}
+
+toxval.apcra[,toxval.apcra.unit := toxval_units]
+toxval.apcra[,toxval.apcra.mkd := toxval_numeric]
+table(toxval.apcra[toxval_units=='ppm']$common_name)
+```
+* Ensure all toxval_numeric are numeric by examining range
+
+```{r, warning=FALSE}
+
+
+toxval.apcra <- toxval.apcra[!(toxval_numeric==-999)] # didn't change after filtering for qa_status
+range(toxval.apcra$toxval_numeric)
+
+```
+
+```{r, warning=FALSE}
+
+table(toxval.apcra[,c('toxval_units')])
+```
+
+* Convert all units to mg/kg/day
+###
+
+```{r ug-kg-mkd, warning=FALSE}
+# conversion from ug or g/kg-day to mg/kg-day (mkd)
+toxval.apcra[toxval_units=='ug/kg bdwt', toxval.apcra.mkd := toxval_numeric/1000]
+toxval.apcra[toxval_units=='ug/kg bdwt/d', toxval.apcra.mkd := toxval_numeric/1000]
+toxval.apcra[toxval_units %in% c('ug/kg bdwt','ug/kg bdwt/d'), toxval.apcra.unit := 'mg/kg-day']
+```
+
+* Based on subset of % and % diet, will assume that is feed and delete Hamster
+
+```{r, warning=FALSE}
+
+table(toxval.apcra[toxval_units %in% c('% diet','%'), c('exposure_method','common_name')])
+# will assume that % means in feed 
+```
+```{r pct-diet-mkd, warning=FALSE}
+
+# conversions for % feed/diet into mkd, where 1% in diet = 10,000 ppm
+# get from % in diet to ppm multiplying by 10,000
+# get to mg/kg/d by muliplying by the 1ppm to mkd conversion by species
+
+toxval.apcra[toxval_units %in% c('%', '% diet') & common_name %in% c('dog','Dog'), toxval.apcra.mkd := (toxval_numeric*10000)*0.025]
+toxval.apcra[toxval_units %in% c('%', '% diet') & common_name %in% c('rat', 'Rat'), toxval.apcra.mkd := (toxval_numeric*10000)*0.05]
+toxval.apcra[toxval_units %in% c('%', '% diet') & common_name %in% c('mouse', 'Mouse'), toxval.apcra.mkd := (toxval_numeric*10000)*0.15]
+toxval.apcra[toxval_units %in% c('%', '% diet') & common_name %in% c('rabbit','Rabbit'), toxval.apcra.mkd := (toxval_numeric*10000)*0.03]
+toxval.apcra <- toxval.apcra[!(toxval_units %in% c('%', '% diet') & common_name %in% c('Hamster'))]
+
+toxval.apcra[toxval_units %in% c('%', '% diet'), toxval.apcra.unit := 'mg/kg-day']
+
+```
+
+```{r, warning=FALSE}
+
+table(toxval.apcra[toxval_units %in% c('ppm','ppb'),c('toxval_units','common_name')])
+```
+
+
+```{r convert-ppm-mkd, warning=FALSE}
+# conversions to mkd from ppm
+
+#toxval.apcra[toxval_units=='ppm' & species_common=='dog', toxval.apcra.mkd := toxval_numeric*0.025]
+toxval.apcra[toxval_units=='ppm' & common_name=='Rat', toxval.apcra.mkd := toxval_numeric*0.05]
+toxval.apcra[toxval_units=='ppm' & common_name=='Black Rat', toxval.apcra.mkd := toxval_numeric*0.05]
+toxval.apcra[toxval_units=='ppm' & common_name=='Mouse', toxval.apcra.mkd := toxval_numeric*0.15]
+#toxval.apcra[toxval_units=='ppm' & species_common=='rabbit', toxval.apcra.mkd := toxval_numeric*0.03]
+#toxval.apcra[toxval_units=='ppm' & species_common=='guinea pig', toxval.apcra.mkd := toxval_numeric*0.040]
+toxval.apcra[toxval_units=='ppm' & common_name=='Hamster', toxval.apcra.mkd := toxval_numeric*0.094]
+toxval.apcra[toxval_units=='ppm', toxval.apcra.unit := 'mg/kg-day']
+```
+
+```{r, warning=FALSE}
+# conversions from ppb diet
+table(toxval.apcra[toxval_units=='ppb diet', c('common_name', 'toxval_units')])
+
+```
+```{r convert ppb-mkd, warning=FALSE}
+
+toxval.apcra[toxval_units=='ppb diet' & common_name=='Mouse',toxval.apcra.mkd := toxval_numeric*0.001*0.015 ]
+toxval.apcra[toxval_units=='ppb diet' & common_name=='Rat',toxval.apcra.mkd := toxval_numeric*0.001*0.05 ]
+toxval.apcra[toxval_units=='ppb diet', toxval.apcra.unit := 'mg/kg-day']
+```
+
+```{r, warning=FALSE}
+
+table(toxval.apcra[toxval_units %in% c('mg/kg diet','mg/kg diet/d'),c('toxval_units','common_name')])
+
+# toxval.apcra[toxval_units=='mg/kg'] # somewhat impossible to know if this is in diet or kg-bw; on inspection it mostly seems like mg/kg-bw
+```
+
+```{r convert-mg-kg-diet-mkd,warning=FALSE}
+
+# conversions for mg/kg diet to mkd, where 1 mg/kg diet ~ 1 ppm in diet
+toxval.apcra[toxval_units=='mg/kg diet' & common_name=='Dog', toxval.apcra.mkd := toxval_numeric*0.025]
+toxval.apcra[toxval_units=='mg/kg diet' & common_name=='Rat', toxval.apcra.mkd := toxval_numeric*0.05]
+toxval.apcra[toxval_units=='mg/kg diet/d' & common_name=='Rat', toxval.apcra.mkd := toxval_numeric*0.05]
+toxval.apcra[toxval_units=='mg/kg diet' & common_name=='Mouse', toxval.apcra.mkd := toxval_numeric*0.15]
+toxval.apcra[toxval_units=='mg/kg diet' & common_name=='Hamster', toxval.apcra.mkd := toxval_numeric*0.094]
+toxval.apcra[toxval_units %in% c('mg/kg diet','mg/kg diet/d'), toxval.apcra.unit := 'mg/kg-day']
+
+```
+
+
+```{r, warning=FALSE}
+
+toxval.apcra[toxval_units=='g/L' & common_name=='Rat', toxval.apcra.mkd := toxval_numeric*1000*0.05]
+toxval.apcra[toxval_units %in% c('g/L'), toxval.apcra.unit := 'mg/kg-day']
+```
+
+```{r, warning=FALSE}
+
+table(toxval.apcra$toxval.apcra.unit)
+```
+
+### ToxVal type
+
+```{r, warning=FALSE}
+table(toxval.apcra$toxval_type)
+#unique(toxval.apcra$toxval_type)
+```
+
+* Keep only the following units on effect level
+
+```{r, warning=FALSE}
+
+toxval.apcra <- toxval.apcra[toxval_type %in% c('BMD',
+                                                'BMDL',
+                                                'BMDL10',
+                                                'HNEL',
+                                                'LEL',
+                                                'LOAEL',
+                                                'NEL',
+                                                'NOAEL',
+                                                'NOAEL ',
+                                                'NOEL',
+                                                'NEL',
+                                                # remove these later but want to see them first
+                                                'RfD',
+                                                'cancer slope factor'
+                                                )]
+```
+
+```{r, warning=FALSE}
+
+table(toxval.apcra$toxval_type)
+
+```
+
+## Examine doses
+
+* A histogram of the values suggests that most fall within 1-1000 mg/kg-bw/day. 
+* likely want to examine extreme values.
+* Most of the extreme values appear to be RfDs (corrected with UFs).
+
+```{r, warning=FALSE}
+
+
+ggplot(data=toxval.apcra[,c('toxval.apcra.mkd')], aes(x=log10(toxval.apcra.mkd)))+
+  geom_histogram(bins=50)+
+  theme_bw()+
+  xlab("Toxval log10-mg/kg/day values")
+  
+
+```
+
+* Remove RfDs and look at distribution of NELs/NOAELs/LOAELs/LELs
+
+```{r, warning=FALSE}
+
+toxval.apcra.norfds <- toxval.apcra[!(toxval_type %in% c('RfD','cancer slope factor'))]
+ggplot(data=toxval.apcra.norfds[,c('toxval.apcra.mkd')], aes(x=log10(toxval.apcra.mkd)))+
+  geom_histogram(bins=50)+
+  theme_bw()
+  
+
+```
+
+* 262 observations are less than 0.1 mg/kg/day
+* 51 observations are less than 0.01 mg/kg/day for 9 dtxsids
+* 165 DTXSIDs in the dataset with no RfDs
+
+```{r, warning=FALSE}
+
+lo.values <- toxval.apcra.norfds[toxval.apcra.mkd < 0.01]
+
+length(unique(toxval.apcra.norfds$dtxsid)) #165 dtxsids
+```
+
+* One chemical in the low observations appears to have one observation that is much lower than the others for the chemical.
+
+```{r, warning=FALSE}
+lo.values[dtxsid=='DTXSID6020062']
+
+```
+
+* Look at distribution just for this one chemical...DTXSID6020062
+* the lowest values are all the same, seem to come from same study, and are extremely low compared to the rest.
+
+```{r, warning=FALSE}
+
+ggplot(data=toxval.apcra.norfds[dtxsid=='DTXSID6020062',c('toxval.apcra.mkd')], aes(x=log10(toxval.apcra.mkd)))+
+  geom_histogram(bins=50)+
+  theme_bw()
+
+```
+
+# Compare the new ToxVal PODs {.tabset .tabset-fade .tabset-pills}
+
+## Create summary
+
+* Create the summary for comparison to the previous retrospective chemicals.
+* Retrospective case study used a refined set from dev_toxval_v5.
+* Adding in summary quantile values from 5-30%.
+
+```{r, warning=FALSE}
+toxval.apcra.summary <- unique(toxval.apcra.norfds[, list(
+  min.toxval.numeric = min(toxval.apcra.mkd),
+  p5.toxval.numeric = quantile(toxval.apcra.mkd, probs=c(0.05)),
+  p10.toxval.numeric = quantile(toxval.apcra.mkd, probs=c(0.10)),
+  p15.toxval.numeric = quantile(toxval.apcra.mkd, probs=c(0.15)),
+  p20.toxval.numeric = quantile(toxval.apcra.mkd, probs=c(0.20)),
+  p25.toxval.numeric = quantile(toxval.apcra.mkd, probs=c(0.25)),
+  p30.toxval.numeric = quantile(toxval.apcra.mkd, probs=c(0.30)),
+  max.toxval.numeric = max(toxval.apcra.mkd),
+  median.toxval.numeric = median(toxval.apcra.mkd),
+  mean.toxval.numeric = mean(toxval.apcra.mkd),
+  stdev.toxval.numeric = sd(toxval.apcra.mkd),
+  number.toxval.numeric = .N
+), by=list(dtxsid, casrn, name)])
+
+```
+
+* Create separate summary for subchronic only.
+
+```{r, warning=FALSE}
+
+table(toxval.apcra.norfds$risk_assessment_class)
+```
+
+```{r, warning=FALSE, echo=FALSE, eval=FALSE}
+# discovered a bug in the code where we were using study_duration_class instead of risk_assessment_class to pull subchronic
+# can see there are a lot of subchronics from risk_assessment_class and not many from study_duration_class
+table(toxval.apcra.norfds$study_duration_class)
+
+```
+
+```{r, warning=FALSE}
+# updating from study_duration_class to risk_assessment_class increases the number of chemicals with subchronic PODs from 9 to 160
+
+toxval.apcra.summary.subchronic <- unique(toxval.apcra.norfds[risk_assessment_class %in% c('subchronic','repeat dose other','short-term'), list(
+  min.toxval.numeric.sub = min(toxval.apcra.mkd),
+  p5.toxval.numeric.sub = quantile(toxval.apcra.mkd, probs=c(0.05)),
+  p10.toxval.numeric.sub = quantile(toxval.apcra.mkd, probs=c(0.10)),
+  p15.toxval.numeric.sub = quantile(toxval.apcra.mkd, probs=c(0.15)),
+  p20.toxval.numeric.sub = quantile(toxval.apcra.mkd, probs=c(0.20)),
+  p25.toxval.numeric.sub = quantile(toxval.apcra.mkd, probs=c(0.25)),
+  p30.toxval.numeric.sub = quantile(toxval.apcra.mkd, probs=c(0.30)),
+  max.toxval.numeric.sub = max(toxval.apcra.mkd),
+  median.toxval.numeric.sub = median(toxval.apcra.mkd),
+  mean.toxval.numeric.sub = mean(toxval.apcra.mkd),
+  stdev.toxval.numeric.sub = sd(toxval.apcra.mkd),
+  number.toxval.numeric.sub = .N
+), by=list(dtxsid, casrn, name)])
+
+```
+
+* APCRA retrospective supp file 2 values
+* Use the 5th percentile PODs for comparison
+* 96 substances to compare
+
+```{r, warning=FALSE}
+
+toxval.apcra.summary$apcra.ret.5p.POD <- apcra.ret$p5.POD[match(toxval.apcra.summary$dtxsid,
+                                                                apcra.ret$DTXSID)]
+
+toxval.apcra.summary[, diff := as.numeric(log10(p5.toxval.numeric) - log10(apcra.ret.5p.POD)) ]
+toxval.apcra.summary[!is.na(diff),label := name]
+toxval.apcra.summary[diff > -0.5, label := ""]
+toxval.apcra.summary[is.na(diff), label := ""]
+
+big.diffs <- toxval.apcra.summary[diff< -0.5, dtxsid]
+
+length(unique(toxval.apcra.summary[!is.na(diff)]$dtxsid))
+
+```
+
+## Comparison of overall POD to retrospective case study POD
+
+```{r, warning=FALSE, fig.height=4, fig.width=6}
+#library(ggrepel)
+
+ggplot(data=toxval.apcra.summary, aes(x=apcra.ret.5p.POD, y=p5.toxval.numeric)) +
+  geom_point(size=1)+ 
+  geom_text_repel(data=toxval.apcra.summary, aes(x=apcra.ret.5p.POD, y=p5.toxval.numeric, label=label))+
+  scale_y_log10(limits=c(10^-3,10^5),
+                breaks = scales::trans_breaks("log10", function(x) 10^x),
+                labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+   scale_x_log10(limits=c(10^-3,10^5),
+                breaks = scales::trans_breaks("log10", function(x) 10^x),
+                labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  geom_abline(slope=1, intercept=0) +
+  geom_abline(slope=1, intercept=0.5, linetype="dashed") +
+  geom_abline(slope=1, intercept=-0.5, linetype="dashed")+
+  theme_bw()+
+  theme(axis.title = element_text(size=14),
+        axis.text = element_text(size=12))+
+  xlab('5th percentile APCRA retrospective POD')+
+  ylab('5th percentile APCRA prospective POD')
+
+
+```
+* For these substances, the new ToxVal 5th percentile POD was lower by at least 0.5 log10-mg/kg/day
+* None of them seem quite as egregious as the one above - no separations of 3-4 orders of magnitude between lowest values and next lowest.
+
+```{r, warning=FALSE, fig.height=6, fig.width=8}
+
+diffs <- toxval.apcra.norfds[dtxsid %in% big.diffs, c('dtxsid','name','toxval.apcra.mkd')]
+ggplot(data=diffs, aes(x=log10(toxval.apcra.mkd)))+
+  geom_histogram(bins=50)+
+  theme_bw()+
+  scale_y_log10()+
+  facet_wrap(~ name)
+```
+
+## Comparison of different quantiles
+
+```{r, warning=FALSE}
+
+toxval.summary.long <- melt.data.table(toxval.apcra.summary,
+                                       id.vars = c('dtxsid','casrn','name', 'apcra.ret.5p.POD'),
+                                       measure.vars = c('p5.toxval.numeric',
+                                                        'p10.toxval.numeric',
+                                                        'p15.toxval.numeric',
+                                                        'p20.toxval.numeric',
+                                                        'p25.toxval.numeric',
+                                                        'p30.toxval.numeric'),
+                                       variable.name = c('toxval.p'))
+
+col.num <- c("value", "apcra.ret.5p.POD")
+toxval.summary.long <- toxval.summary.long[, (col.num) := lapply(.SD, function(x) log10(x)), .SDcols = col.num ]
+head(toxval.summary.long)
+```
+
+
+```{r fig.width=10, fig.height=6, warning=FALSE}
+
+fig.toxval.ecdf <- ggplot(toxval.summary.long[toxval.p %in% c('p5.toxval.numeric',
+                                                        'p10.toxval.numeric',
+                                                        'p15.toxval.numeric',
+                                                        'p20.toxval.numeric',
+                                                        'p25.toxval.numeric',
+                                                        'p30.toxval.numeric')], aes(value, color=toxval.p))+
+  stat_ecdf(geom='step', size=1.5)+
+  scale_y_continuous(trans = 'log10',
+                     breaks= c(0.01, 0.1,0.2,0.3,0.4,0.5,0.75, 1))+
+  ylab("Cumulative Frequency") +
+  xlab('log10 POD quantile')+
+  theme_bw() +
+  theme(
+    axis.line = element_line(colour = "black"),
+    axis.text = element_text(size=10),
+    axis.title = element_text(size=12, face='bold'))+
+  theme(axis.text.y = element_text(family = "sans", face = "bold", size=12))+
+  theme(legend.position="right", legend.title=element_blank())+
+  scale_x_continuous(breaks=seq(-5,10,1)) +
+  coord_cartesian(xlim = c(-5, 10)) +
+  #scale_color_viridis(discrete=TRUE, name='Ratio Type')+
+  scale_colour_manual(breaks=c('p5.toxval.numeric',
+                                                        'p10.toxval.numeric',
+                                                        'p15.toxval.numeric',
+                                                        'p20.toxval.numeric',
+                                                        'p25.toxval.numeric',
+                                                        'p30.toxval.numeric'),
+                      values=c("#440154FF", "#3B528BFF", "#21908CFF", "#5DC863FF", "#FDE725FF", 'darkmagenta'),
+                      labels('5th %-ile','10th %-ile','15th %-ile', '20th %-ile','25th %ile', '30th %ile'))+
+  geom_vline(xintercept=-2, lty='dashed', color='red')+
+  geom_vline(xintercept=2, lty='dashed', color='red')+
+  geom_vline(xintercept=0, color='red')+
+  geom_hline(yintercept=0.90, lty='dashed', color='red')
+
+fig.toxval.ecdf
+
+
+
+
+```
+
+
+
+```{r, warning=FALSE}
+
+fig.toxval.violin <- ggplot(toxval.summary.long[toxval.p %in% c('p5.toxval.numeric',
+                                                        'p10.toxval.numeric',
+                                                        'p15.toxval.numeric',
+                                                        'p20.toxval.numeric',
+                                                        'p25.toxval.numeric',
+                                                        'p30.toxval.numeric')], aes(x=toxval.p, y=value, fill=toxval.p))+
+  geom_violin(draw_quantiles = c(0.25,0.5,0.75), color='white', trim=FALSE)+
+  #geom_boxplot(width=0.1, color='white')+
+  scale_y_continuous(breaks=seq(-3,2,0.5))+
+  ylab("ToxVal POD Value, log10-mg/kg/day") +
+  xlab('Percentile')+
+  theme_bw() +
+  theme(
+    axis.line = element_line(colour = "black"),
+    axis.text = element_text(size=10),
+    axis.title = element_text(size=12, face='bold'))+
+  theme(
+        axis.text.x = element_text(angle=45, hjust=1))+
+  theme(legend.position="right", legend.title=element_blank())+
+  scale_fill_manual(values=viridis(6),
+                    breaks=c('p5.toxval.numeric',
+                                                        'p10.toxval.numeric',
+                                                        'p15.toxval.numeric',
+                                                        'p20.toxval.numeric',
+                                                        'p25.toxval.numeric',
+                                                        'p30.toxval.numeric'),
+                    labels=c('5th','10th','15th','20th','25th','30th'))+
+  scale_x_discrete(labels=c('p5.toxval.numeric' ='5th',
+                                                        'p10.toxval.numeric' = '10th',
+                                                        'p15.toxval.numeric' = '15th',
+                                                        'p20.toxval.numeric' = '20th',
+                                                        'p25.toxval.numeric' = '25th',
+                                                        'p30.toxval.numeric' = '30th'))
+
+fig.toxval.violin
+```
+```{r, warning=FALSE}
+
+wilcox <- group_by(toxval.summary.long, toxval.p) %>%
+  summarise(
+    count = n(),
+    median = median(value, na.rm = TRUE),
+    IQR = IQR(value, na.rm = TRUE)
+  )
+wilcox
+```
+
+
+```{r, warning=FALSE}
+
+wilcox.test(data=toxval.apcra.summary, 
+            toxval.apcra.summary$p5.toxval.numeric, 
+            toxval.apcra.summary$p10.toxval.numeric, mu=0, alt='two.sided',paired=TRUE, conf.int=TRUE, conf.level=0.95)
+```
+
+```{r, warning=FALSE}
+
+fig.toxval.distrib <- ggplot()+
+  geom_histogram(data=toxval.apcra.norfds[,c('dtxsid','toxval.apcra.mkd')],
+                 aes(x=toxval.apcra.mkd))+
+  
+  theme_bw()+
+  ylab('Frequency')+
+  xlab('ToxVal Numeric POD (log10-mg/kg/day)')+
+  theme(axis.text.x = element_text(size=12, angle=45, hjust=1),
+        axis.text.y = element_text(size=12),
+        axis.title = element_text(size=14),
+        plot.title = element_text(hjust=0.5))+
+  scale_x_log10(limits=c(10^-4,10^4),
+                breaks = scales::trans_breaks("log10", function(x) 10^x),
+                labels = scales::trans_format("log10", scales::math_format(10^.x)))
+
+
+fig.toxval.distrib
+```
+
+
+
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/SuppFig_ToxVal_percentiles_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=8, height=5, units='in', res=450)
+plot_grid(fig.toxval.distrib, fig.toxval.violin, ncol=2, labels=c("A", "B"), label_size = 14)
+dev.off()
+
+
+```
+
+# Reproducibility {.tabset .tabset-fade .tabset-pills}
+
+## Write files
+
+```{r, warning=FALSE, eval=FALSE}
+
+
+list_data <- list("toxval.apcra.pro.summary" = as.data.frame(toxval.apcra.summary),
+                  "toxval.apcra.pro.summ.SUBonly" = as.data.frame(toxval.apcra.summary.subchronic),
+                  "toxval.apcra.pro.all" = as.data.frame(toxval.apcra.norfds))
+
+write.xlsx(list_data, './source/apcra_pro_toxval_v9_4_PODs.xlsx')
+save(toxval.apcra.norfds,
+     toxval.apcra.summary,
+     toxval.apcra.summary.subchronic,
+     file='./source/apcra_pro_toxval_v9_4_PODs.RData')
+
+```
+
+## Rsession
+
+```{r, warning=FALSE}
+
+print(sessionInfo())
+
+```

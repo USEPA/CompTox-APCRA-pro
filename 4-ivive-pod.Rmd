@@ -1,0 +1,2933 @@
+---
+title: "4 IVIVE and POD Comparisons"
+author: "Katie Paul Friedman"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    collapsed: yes
+    df_print: paged
+    lightbox: no
+    number_sections: yes
+    self_contained: yes
+    thumbnails: no
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE}
+library(caret)
+library(cowplot)
+library(data.table)
+library(DescTools)
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(ggpmisc)
+library(ggstance)
+library(gplots)
+library(gridExtra)
+library(httk)
+library(kableExtra)
+library(jtools)
+library(openxlsx)
+library(parallel)
+library(plotly)
+library(randomForest)
+library(RMySQL)
+library(tictoc)
+library(tidyr)
+#devtools::install_git('http://ncct-bitbucket.epa.gov/scm/tox/tcpl.git', ref ='TOX-337', force=TRUE)
+library(tcpl)
+library(viridis)
+
+```
+
+# Load Data {.tabset .tabset-fade .tabset-pills}
+
+## Toxicodynamic NAM data
+
+```{r, warning=FALSE}
+
+#load('./source/tier1_NAMs_apcra_pro_03072022.RData')
+#load('./source/tier1_NAMs_apcra_pro_02102023.RData')
+#load('./source/in_vitro/tier1_NAMs_apcra_pro_04032023.RData')
+load('./source/in_vitro/tier1_NAMs_apcra_pro_02262024.RData')
+colnames(asnm.tier1) # this is the file for all BMDs/ACCs
+# mega.mc5.hitc1 may be useful if we want to apply armitage model when BSK data are updated
+
+```
+
+## In vivo data for comparison
++ ToxVal 9.4 PODs
++ APCRA retrospective case study PODs
+
+
+```{r, warning=FALSE}
+
+load('./source/in_vivo/apcra_pro_toxval_v9_4_PODs.RData')
+apcra.ret <- as.data.table(read.xlsx('./source/chem/Supp_File_2_pod_ratio_master_final.xlsx', sheet=1)) # for comparison
+
+```
+
+```{r, warning=FALSE, eval=FALSE, echo=FALSE}
+
+# Loading Supplemental File from Aurisano et al. 2023
+
+aurisano2023 <- as.data.table(read.xlsx('./source/in_vivo/Supplemental Excel File EHP11524-revised.xlsx', sheet=6))
+
+aurisano2023 <- aurisano2023[-c(1)] # remove first line of formatting from this file
+names(aurisano2023) <- aurisano2023 %>% slice(1) %>% unlist()
+
+aurisano2023 <- aurisano2023[,c(1:10)] # non-reproductive/developmental PODs only in first set of 10 columns
+aurisano2023 <- aurisano2023 %>% slice(-1)
+
+head(aurisano2023)
+
+```
+
+## AQC information
+
+```{r, warning=FALSE}
+
+ad.tbl <- as.data.table(read.xlsx('./source/chem/apcra_chem_ad.xlsx', sheet='apcra_ad', colNames = TRUE))
+
+```
+
+## Toxicokinetic data additions
+
+* 137 chemicals have human HTTK data prior to loading in silico
+
+```{r, warning=FALSE}
+#asnm.tier1$CASRN <- apcra.list$CASRN[match(asnm.tier1$dsstox_substance_id, apcra.list$DTXSID)] # there were deformatted CASRN causing a bug
+
+httk.chem.tbl <- as.data.table(chem.physical_and_invitro.data)
+asnm.tier1$CASRN <- httk.chem.tbl$CAS[match(asnm.tier1$dsstox_substance_id, httk.chem.tbl$DTXSID)]
+
+asnm.tier1.df <- as.data.frame(subset(asnm.tier1, CASRN %in% get_cheminfo(species=c('Human'))))
+```
+
+* Add the Health Canada data supplied by Marc Beal.
+* With this contribution, we are at 154 substances that have bioactivity and HTTK.
+
+```{r, warning=FALSE}
+
+hc.httk <- as.data.table(read.xlsx('./source/httk/20191025-Health_Canada_Prospective_Data_HTTK.xlsx', sheet = 'add_chemtable', colNames = TRUE))
+
+#hc.httk[is.na(Human.Funbound.plasma)] # true for DTXSID7023938 only
+
+hc.httk[is.na(Human.Funbound.plasma), Human.Funbound.plasma := 0] # bug in HTTK is that it will not run 3 compss if is.na(Fup), so set to zero
+hc.httk.df <- as.data.frame(hc.httk)
+
+chem.physical_and_invitro.data <- add_chemtable(hc.httk.df,
+                                                current.table=chem.physical_and_invitro.data,
+                                                data.list=list(Compound="Compound",
+                                                               CAS="CAS",
+                                                               DTXSID="DTXSID",
+                                                               Clint="Human.Clint",
+                                                               #Clint.pValue="Human.Clint.pValue", # don't have it
+                                                               Funbound.plasma="Human.Funbound.plasma",
+                                                               #LogP="logP",                   
+                                                               MW="MW",
+                                                               Species="Species",
+                                                               Reference="Human.Clint.Reference"
+                                                               #pKa_Accept="pKa_Accept", # don't have this
+                                                               #pKa_Donor="pKa_Donor" # don't have this
+                                                ),
+                                                overwrite=T)
+
+```
+
+* Now have 151 with 3 compss after loading HC HTTK data.
+* Now have 131 chem with pbtk model HTTK data.
+
+```{r, warning=FALSE}
+asnm.tier1.df <- as.data.frame(subset(asnm.tier1, CASRN %in% get_cheminfo(species=c('Human'), model="3compartmentss"))) #148
+asnm.tier1.df.pbtk <- as.data.frame(subset(asnm.tier1, CASRN %in% get_cheminfo(species=c('Human'), model="pbtk"))) #131
+```
+
+```{r, warning=FALSE}
+
+httk.chem.tbl <- as.data.table(chem.physical_and_invitro.data)
+httk.chem.tbl.apcra <- httk.chem.tbl[DTXSID %in% asnm.tier1[,dsstox_substance_id]] #196 but could include rat/other species
+httk.chem.tbl.apcra.hu <- as.data.frame(subset(httk.chem.tbl.apcra, CAS %in% get_cheminfo(species=c('Human'), model="3compartmentss"))) #148
+
+httk.chem.tbl.apcra.hu.pbtk <- as.data.frame(subset(httk.chem.tbl.apcra, CAS %in% get_cheminfo(species=c('Human'), model="pbtk"))) #131
+
+httk.chem.tbl.apcra.3css <- httk.chem.tbl.apcra[!is.na(Human.Clint)] #166
+
+dtxsids <- setdiff(httk.chem.tbl.apcra.3css$DTXSID, httk.chem.tbl.apcra.hu$DTXSID)
+write.csv(httk.chem.tbl.apcra[DTXSID %in% dtxsids], "./source/httk/test_get_cheminfo_Human_3compss.csv")
+
+httk.chem.tbl.apcra.3css[DTXSID %in% dtxsids]
+
+get.cheminfo.human.3css <- as.data.frame(subset(httk.chem.tbl.apcra, CAS %in% get_cheminfo(species=c('Human'), model = "3compartmentss"))) #148
+
+httk.chem.tbl.apcra[is.na(Human.Funbound.plasma), Human.Funbound.plasma := 0] 
+httk.chem.tbl.apcra[is.na(Human.Clint.pValue), Human.Clint.pValue := 0]
+
+```
+
+* Here are the substances that have "missing" HTTK.
+* Note that we cover all with in silico (Sipes et al 2017) approaches if we want to.
+
+```{r, warning=FALSE}
+
+httk.have <- subset(asnm.tier1, CASRN %in% get_cheminfo(species=c('Human'), model='3compartmentss')) # following add of Health Canada data, 148
+httk.missing <- asnm.tier1[!CASRN %in% httk.have[,CASRN]] #48 chemicals - may include a bunch of aqc failures
+
+kable(httk.missing[,c('dsstox_substance_id','chnm')])
+
+```
+
+
+* how many substances can follow pbtk model? 131
+
+```{r, warning=FALSE}
+
+pbtk.have <- subset(asnm.tier1, CASRN %in% get_cheminfo(species=c('Human'), model='pbtk')) #only 131 have this
+
+```
+
+# Calculate AEDs {.tabset .tabset-fade .tabset-pills}
+
+* Load in silico information to fill gaps
+
+```{r, warning=FALSE, eval=FALSE}
+load_sipes2017()
+load_pradeep2020()
+load_dawson2021()
+```
+* Make the ACC values into arithmetic micromolar units.
+
+```{r, warning=FALSE}
+
+col.num <- c("modl_acc_5p", "ATG", "BSK", 
+"NVS", "CCTE", "STM", "httr.u20s.pod.sig", "httr.mcf7.pod.sig", "httr.heparg.pod.sig", "htpp.u2os.pac.min", "Astar_BEAS2B_final", 
+"Astar_HepG2_final", "Astar_HK2_final", "min.acc.targeted.nam", "min.httr.htpp.targetnams")
+
+asnm.tier1.arith <- asnm.tier1[, (col.num) := lapply(.SD, function(x) 10^(x)), .SDcols = col.num ]
+
+```
+
+* subsets for 3compss, pbtk
+
+```{r, warning=FALSE}
+
+#for (j in seq_along(names(asnm.tier1.arith))) {
+#  set(asnm.tier1,
+#      i = which(is.na(asnm.tier1.arith[[j]])),
+#      j = j, 
+#      value = 1000)
+#}
+
+
+asnm.tier1.arith.3css <- subset(asnm.tier1.arith, CASRN %in% get_cheminfo(species=c('Human'), model='3compartmentss')) #168
+
+
+asnm.tier1.arith.pbtk <- subset(asnm.tier1.arith, CASRN %in% get_cheminfo(species=c('Human'), model='pbtk')) #165
+
+httk.dt <- as.data.table(chem.physical_and_invitro.data)
+httk.dt <- httk.dt[DTXSID %in% apcra.list[,DTXSID]]
+httk.dt[,c('Human.Clint','Human.Funbound.plasma')]
+
+asnm.tier1.arith.3css <- as.data.table(asnm.tier1.arith)
+asnm.tier1.arith.pbtk <- as.data.table(asnm.tier1.arith)
+
+
+```
+
+```{r, warning=FALSE}
+
+colnames(asnm.tier1.arith.3css)
+
+```
+* 3 compss HTTK v2.3.0
+
+```{r, warning=FALSE, eval=FALSE}
+
+set.seed(1234567)
+
+tictoc::tic() # start timer
+
+aed50.3compss.5pacc <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$modl_acc_5p,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.atg <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$ATG,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.bsk <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$BSK,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.nvs <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$NVS,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.ccte <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$CCTE,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.stm <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$STM,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.httr.mcf7.sigbmd <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$httr.mcf7.pod.sig,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.httr.u2os.sigbmd <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$httr.u20s.pod.sig,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.httr.heparg.sigbmd <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$httr.heparg.pod.sig,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.htpp.u2os <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$htpp.u2os.pac.min,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.astar.beas2b <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$Astar_BEAS2B_final,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.astar.hepg2 <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$Astar_HepG2_final,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.3compss.astar.hek293 <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.3css$Astar_HK2_final,
+                              asnm.tier1.arith.3css$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+asnm.tier1.arith.3css$aed50.3compss.5pacc <- aed50.3compss.5pacc
+asnm.tier1.arith.3css$aed50.3compss.atg <- aed50.3compss.atg
+asnm.tier1.arith.3css$aed50.3compss.bsk <- aed50.3compss.bsk
+asnm.tier1.arith.3css$aed50.3compss.ccte <- aed50.3compss.ccte
+asnm.tier1.arith.3css$aed50.3compss.nvs <- aed50.3compss.nvs
+asnm.tier1.arith.3css$aed50.3compss.stm <- aed50.3compss.stm
+asnm.tier1.arith.3css$aed50.3compss.atg <- aed50.3compss.atg
+asnm.tier1.arith.3css$aed50.3compss.httr.mcf7.sigbmd <- aed50.3compss.httr.mcf7.sigbmd
+asnm.tier1.arith.3css$aed50.3compss.httr.u2os.sigbmd <- aed50.3compss.httr.u2os.sigbmd
+asnm.tier1.arith.3css$aed50.3compss.httr.heparg.sigbmd  <- aed50.3compss.httr.heparg.sigbmd 
+asnm.tier1.arith.3css$aed50.3compss.htpp.u2os  <- aed50.3compss.htpp.u2os 
+asnm.tier1.arith.3css$aed50.3compss.astar.beas2b  <- aed50.3compss.astar.beas2b 
+asnm.tier1.arith.3css$aed50.3compss.astar.hepg2  <- aed50.3compss.astar.hepg2 
+asnm.tier1.arith.3css$aed50.3compss.astar.hek293  <- aed50.3compss.astar.hek293
+
+save(asnm.tier1.arith.3css, file='./output/asnm_tier1_arith_3css_Feb2024.RData')
+
+tictoc::toc() # end timer
+```
+
+* PBTK version v2.3.0
+
+```{r, warning=FALSE, eval=FALSE}
+
+set.seed(1234567)
+
+aed50.pbtk.5pacc <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$modl_acc_5p,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                   model='pbtk',
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday'
+                                 )
+                                
+                              })
+aed50.pbtk.atg <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$ATG,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                  model='pbtk',
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.bsk <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$BSK,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                  model='pbtk',
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.nvs <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$NVS,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.ccte <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$CCTE,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.stm <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$STM,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.httr.mcf7.sigbmd <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$httr.mcf7.pod.sig,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.httr.u2os.sigbmd <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$httr.u20s.pod.sig,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.httr.heparg.sigbmd <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$httr.heparg.pod.sig,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.htpp.u2os <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$htpp.u2os.pac.min,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.astar.beas2b <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$Astar_BEAS2B_final,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.astar.hepg2 <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$Astar_HepG2_final,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+aed50.pbtk.astar.hek293 <- mcmapply(mc.cores=1,
+                              asnm.tier1.arith.pbtk$Astar_HK2_final,
+                              asnm.tier1.arith.pbtk$CASRN,
+                              FUN=function(x,y){
+                                calc_mc_oral_equiv(
+                                  conc=x, 
+                                     chem.cas=y, 
+                                     which.quantile=c(0.50),
+                                     species='Human',
+                                     restrictive.clearance = T, 
+                                     output.units='mgpkgpday')
+                                
+                              })
+
+asnm.tier1.arith.pbtk$aed50.pbtk.5pacc <- aed50.pbtk.5pacc
+asnm.tier1.arith.pbtk$aed50.pbtk.atg <- aed50.pbtk.atg
+asnm.tier1.arith.pbtk$aed50.pbtk.bsk <- aed50.pbtk.bsk
+asnm.tier1.arith.pbtk$aed50.pbtk.ccte <- aed50.pbtk.ccte
+asnm.tier1.arith.pbtk$aed50.pbtk.nvs <- aed50.pbtk.nvs
+asnm.tier1.arith.pbtk$aed50.pbtk.stm <- aed50.pbtk.stm
+asnm.tier1.arith.pbtk$aed50.pbtk.atg <- aed50.pbtk.atg
+asnm.tier1.arith.pbtk$aed50.pbtk.httr.mcf7.sigbmd <- aed50.pbtk.httr.mcf7.sigbmd
+asnm.tier1.arith.pbtk$aed50.pbtk.httr.u2os.sigbmd <- aed50.pbtk.httr.u2os.sigbmd
+asnm.tier1.arith.pbtk$aed50.pbtk.httr.heparg.sigbmd  <- aed50.pbtk.httr.heparg.sigbmd 
+asnm.tier1.arith.pbtk$aed50.pbtk.htpp.u2os  <- aed50.pbtk.htpp.u2os 
+asnm.tier1.arith.pbtk$aed50.pbtk.astar.beas2b  <- aed50.pbtk.astar.beas2b 
+asnm.tier1.arith.pbtk$aed50.pbtk.astar.hepg2  <- aed50.pbtk.astar.hepg2 
+asnm.tier1.arith.pbtk$aed50.pbtk.astar.hek293  <- aed50.pbtk.astar.hek293
+
+save(asnm.tier1.arith.pbtk, file='./output/asnm_tier1_arith_pbtk_2024.RData')
+
+
+```
+
+Load the AEDs generated as RData files.
+
+```{r, warning=FALSE}
+load(file='./output/asnm_tier1_arith_pbtk_2024.RData')
+load(file='./output/asnm_tier1_arith_3css_Feb2024.RData')
+```
+
+```{r merge-aeds, warning=FALSE}
+
+asnm.tier1.all <- merge.data.table(asnm.tier1.arith.3css,
+                                   asnm.tier1.arith.pbtk[,c('dsstox_substance_id',"aed50.pbtk.5pacc", 
+"aed50.pbtk.atg", "aed50.pbtk.bsk", "aed50.pbtk.ccte", "aed50.pbtk.nvs", 
+"aed50.pbtk.stm", "aed50.pbtk.httr.mcf7.sigbmd", "aed50.pbtk.httr.u2os.sigbmd", 
+"aed50.pbtk.httr.heparg.sigbmd", "aed50.pbtk.htpp.u2os", "aed50.pbtk.astar.beas2b", 
+"aed50.pbtk.astar.hepg2", "aed50.pbtk.astar.hek293")],
+by='dsstox_substance_id',
+all.x=TRUE,
+all.y=TRUE)
+
+asnm.tier1.all <- asnm.tier1.all[,c("dsstox_substance_id",
+                                   "aed50.3compss.5pacc", 
+"aed50.3compss.atg", "aed50.3compss.bsk", "aed50.3compss.ccte", 
+"aed50.3compss.nvs", "aed50.3compss.stm", "aed50.3compss.httr.mcf7.sigbmd", 
+"aed50.3compss.httr.u2os.sigbmd", "aed50.3compss.httr.heparg.sigbmd", 
+"aed50.3compss.htpp.u2os", "aed50.3compss.astar.beas2b", "aed50.3compss.astar.hepg2", 
+"aed50.3compss.astar.hek293", "aed50.pbtk.5pacc", "aed50.pbtk.atg", 
+"aed50.pbtk.bsk", "aed50.pbtk.ccte", "aed50.pbtk.nvs", "aed50.pbtk.stm", 
+"aed50.pbtk.httr.mcf7.sigbmd", "aed50.pbtk.httr.u2os.sigbmd", 
+"aed50.pbtk.httr.heparg.sigbmd", "aed50.pbtk.htpp.u2os", "aed50.pbtk.astar.beas2b", 
+"aed50.pbtk.astar.hepg2", "aed50.pbtk.astar.hek293")]
+```
+
+```{r aed-clean-inf, warning=FALSE}
+
+# convert all Inf to NA
+for (j in 1:ncol(asnm.tier1.all)) set(asnm.tier1.all, which(is.infinite(asnm.tier1.all[[j]])), j, NA)
+
+# log10 all AED values
+cols <- c( "aed50.3compss.5pacc", "aed50.3compss.atg", 
+"aed50.3compss.bsk", "aed50.3compss.ccte", "aed50.3compss.nvs", 
+"aed50.3compss.stm", "aed50.3compss.httr.mcf7.sigbmd", "aed50.3compss.httr.u2os.sigbmd", 
+"aed50.3compss.httr.heparg.sigbmd", "aed50.3compss.htpp.u2os", 
+"aed50.3compss.astar.beas2b", "aed50.3compss.astar.hepg2", "aed50.3compss.astar.hek293", 
+"aed50.pbtk.5pacc", "aed50.pbtk.atg", "aed50.pbtk.bsk", "aed50.pbtk.ccte", 
+"aed50.pbtk.nvs", "aed50.pbtk.stm", "aed50.pbtk.httr.mcf7.sigbmd", 
+"aed50.pbtk.httr.u2os.sigbmd", "aed50.pbtk.httr.heparg.sigbmd", 
+"aed50.pbtk.htpp.u2os", "aed50.pbtk.astar.beas2b", "aed50.pbtk.astar.hepg2", 
+"aed50.pbtk.astar.hek293")
+
+asnm.tier1.logaed <- as.data.frame(asnm.tier1.all)
+asnm.tier1.logaed[cols] <- lapply(asnm.tier1.logaed[cols], log10) # make the aed50s in log10-mg/kg/day
+```
+
+
+```{r, warning=FALSE}
+# replace NA by the median for each row
+asnm.tier1.pred <- as.data.frame(asnm.tier1.logaed)
+asnm.tier1.pred[cols] <- t(apply(asnm.tier1.pred[cols], 1, function(x)
+  replace(x, is.na(x), median(x, na.rm=TRUE))))
+
+# add in the stuff to predict
+asnm.tier1.pred <- merge.data.table(asnm.tier1.pred,
+                                    toxval.apcra.summary[,c('dtxsid','p5.toxval.numeric')],
+                                    by.x='dsstox_substance_id',
+                                    by.y='dtxsid') %>% as.data.table()
+
+
+asnm.tier1.pred[, log.p5.toxval.pod := p5.toxval.numeric] # this value was already logged, so just renaming in new column to match old code
+
+```
+
+# Random Forest Prediction of In Vivo POD {.tabset .tabset-fade .tabset-pills}
+The goal of this section was to understand if 3Css or pbtk better outperformed each other, or if addition of certain properties or features could create a baseline RF model that clearly outperformed taking simple means or medians. This work is meant to be exploratory for the purposes of deciding if it is worth pursuing a ML model for a dataset this small. In general, the finding is that the dataset is likely too small and too little of the variance explained by any of the descriptors (AEDs, physchem properties).
+
+The results were less than compelling, but there are some learnings. 
+  + One is that 3Css vs. pbtk model made little overall difference in the prediction.
+  + The Rsquared values tend to be less then 0.2
+  + The RMSE values tend to approach 1.2
+  + Addition of physchem properties like Fup and LogP suggests LogP would be an important feature, but fails to reduce the variance in prediction
+
+## Baseline model
+
+```{r, warning=FALSE}
+# fill NA (missing) values with median by technology type
+
+for (j in seq_along(names(asnm.tier1.pred))) {
+  set(asnm.tier1.pred,
+      i = which(is.na(asnm.tier1.pred[[j]])),
+      j = j, 
+      value = median(asnm.tier1.pred[[j]], na.rm = TRUE))
+}
+```
+
+```{r, warning=FALSE}
+
+colnames(asnm.tier1.pred)
+asnm.tier1.pred <- asnm.tier1.pred[!p5.toxval.numeric==0]
+```
+
+```{r rf-model-default, warning=FALSE}
+
+control <- trainControl(method='repeatedcv',
+                        number=5,
+                        repeats=5)
+
+metric <- "Accuracy"
+set.seed(1234567)
+mtry <- sqrt(26)
+tunegrid <- expand.grid(.mtry=mtry)
+rf_default <- train(data=asnm.tier1.pred[,c(3:27, 29)],
+                    log.p5.toxval.pod~.,
+                    method='rf',
+                    metric='RMSE',
+                    type='regression',
+                    tunegrid=tunegrid,
+                    trControl=control
+                    )
+print(rf_default)
+```
+
+* Try just the 3css AEDs
+
+```{r, warning=FALSE}
+
+rf_3css <- train(data=asnm.tier1.pred[,c(3:14,29)],
+                    log.p5.toxval.pod~.,
+                    method='rf',
+                    metric='RMSE',
+                    tunegrid=tunegrid,
+                    trControl=control
+                    )
+print(rf_3css)
+
+```
+
+* Try just the pbtk AEDs.
+* RMSE goes up and Rsquared goes down from the 3css AEDs, but all in all similar results.
+
+```{r, warning=FALSE}
+
+rf_pbtk <- train(data=asnm.tier1.pred[,c(15:27,29)],
+                    log.p5.toxval.pod~.,
+                    method='rf',
+                    metric='RMSE',
+                    tunegrid=tunegrid,
+                    trControl=control
+                    )
+print(rf_pbtk)
+
+```
+
+## Feature Importance and Applying RFE
+
+* Desire to remove features with absolute correlation of 0.75 or higher.
+* Model may perform better if highly correlated features are removed.
+* 3css and pbtk are highly correlated for the same asnm; can't include both.
+
+```{r, warning=FALSE}
+# load the data
+data(asnm.tier1.pred)
+
+# calculate the correlation matrix
+correlationMatrix <- cor(asnm.tier1.pred[,3:27])
+print(correlationMatrix)
+
+# find attributes that are highly correlated
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
+print(highlyCorrelated)
+
+```
+
+* Consider ranking by feature importance.
+```{r, warning=FALSE}
+
+
+model <- train(log.p5.toxval.pod~., data=asnm.tier1.pred[,c(3:27,29)], method='rf', trControl=control)
+importance <- varImp(model, scale=FALSE)
+plot(importance)
+
+
+```
+
+```{r, warning=FALSE}
+
+print(importance)
+```
+* try RFE
+
+```{r, warning=FALSE}
+control <- rfeControl(functions=rfFuncs, method='cv', number=5)
+results <- rfe(asnm.tier1.pred[,c(3:14,16:27)], as.matrix(asnm.tier1.pred[,28]), sizes = c(1:25), rfeControl = control)
+print(results)
+predictors(results)
+plot(results, type = c("g","o"))
+
+
+
+```
+
+* Add additional features to better describe the chemicals: Fup, logP?
+
+
+```{r, warning=FALSE}
+
+
+asnm.tier1.pred$Fup <- httk.chem.tbl.apcra$Human.Funbound.plasma[match(asnm.tier1.pred$dsstox_substance_id,
+                                                                       httk.chem.tbl.apcra$DTXSID)]
+
+asnm.tier1.pred$logP <- httk.chem.tbl.apcra$logP[match(asnm.tier1.pred$dsstox_substance_id,
+                                                                       httk.chem.tbl.apcra$DTXSID)]
+
+asnm.tier1.pred$Fup[is.na(asnm.tier1.pred$Fup)] <- 0
+asnm.tier1.pred[, Fup := tstrsplit(Fup,",", fixed=TRUE, keep=c(1))]
+asnm.tier1.pred$logP[is.na(asnm.tier1.pred$logP)] <- 0
+
+
+control <- rfeControl(functions=rfFuncs, method='cv', number=5)
+
+
+results <- rfe(asnm.tier1.pred[,c(3:14,16:27,30:31)], as.matrix(asnm.tier1.pred[,29]), sizes = c(1:27), rfeControl = control)
+
+
+print(results)
+predictors(results)
+plot(results, type = c("g","o"))
+
+
+
+```
+
+# Create AED estimates {.tabset .tabset-fade .tabset-pills}
+
+The approach taken is to come up with one AED per chemical x technology grouping. These AEDs are highly correlated with each other and so one value per grouping makes sense.
+Preference to pbtk when available (over 3css).
+
+```{r, warning=FALSE}
+
+asnm.tier1.all <- merge.data.table(asnm.tier1.arith.3css,
+                                   asnm.tier1.arith.pbtk[,c('dsstox_substance_id',"aed50.pbtk.5pacc", 
+"aed50.pbtk.atg", "aed50.pbtk.bsk", "aed50.pbtk.ccte", "aed50.pbtk.nvs", 
+"aed50.pbtk.stm", "aed50.pbtk.httr.mcf7.sigbmd", "aed50.pbtk.httr.u2os.sigbmd", 
+"aed50.pbtk.httr.heparg.sigbmd", "aed50.pbtk.htpp.u2os", "aed50.pbtk.astar.beas2b", 
+"aed50.pbtk.astar.hepg2", "aed50.pbtk.astar.hek293")],
+by='dsstox_substance_id',
+all.x=TRUE,
+all.y=TRUE)
+
+asnm.tier1.all <- asnm.tier1.all[,c("dsstox_substance_id",
+                                   "aed50.3compss.5pacc", 
+"aed50.3compss.atg", "aed50.3compss.bsk", "aed50.3compss.ccte", 
+"aed50.3compss.nvs", "aed50.3compss.stm", "aed50.3compss.httr.mcf7.sigbmd", 
+"aed50.3compss.httr.u2os.sigbmd", "aed50.3compss.httr.heparg.sigbmd", 
+"aed50.3compss.htpp.u2os", "aed50.3compss.astar.beas2b", "aed50.3compss.astar.hepg2", 
+"aed50.3compss.astar.hek293", "aed50.pbtk.5pacc", "aed50.pbtk.atg", 
+"aed50.pbtk.bsk", "aed50.pbtk.ccte", "aed50.pbtk.nvs", "aed50.pbtk.stm", 
+"aed50.pbtk.httr.mcf7.sigbmd", "aed50.pbtk.httr.u2os.sigbmd", 
+"aed50.pbtk.httr.heparg.sigbmd", "aed50.pbtk.htpp.u2os", "aed50.pbtk.astar.beas2b", 
+"aed50.pbtk.astar.hepg2", "aed50.pbtk.astar.hek293")]
+
+# convert all Inf to NA
+for (j in 1:ncol(asnm.tier1.all)) set(asnm.tier1.all, which(is.infinite(asnm.tier1.all[[j]])), j, NA)
+
+cols <- c( "aed50.3compss.5pacc", "aed50.3compss.atg", 
+"aed50.3compss.bsk", "aed50.3compss.ccte", "aed50.3compss.nvs", 
+"aed50.3compss.stm", "aed50.3compss.httr.mcf7.sigbmd", "aed50.3compss.httr.u2os.sigbmd", 
+"aed50.3compss.httr.heparg.sigbmd", "aed50.3compss.htpp.u2os", 
+"aed50.3compss.astar.beas2b", "aed50.3compss.astar.hepg2", "aed50.3compss.astar.hek293", 
+"aed50.pbtk.5pacc", "aed50.pbtk.atg", "aed50.pbtk.bsk", "aed50.pbtk.ccte", 
+"aed50.pbtk.nvs", "aed50.pbtk.stm", "aed50.pbtk.httr.mcf7.sigbmd", 
+"aed50.pbtk.httr.u2os.sigbmd", "aed50.pbtk.httr.heparg.sigbmd", 
+"aed50.pbtk.htpp.u2os", "aed50.pbtk.astar.beas2b", "aed50.pbtk.astar.hepg2", 
+"aed50.pbtk.astar.hek293")
+
+dup.dtxsid <- asnm.tier1.all[duplicated(asnm.tier1.all[,dsstox_substance_id]), dsstox_substance_id] # one substance had diff spids?
+
+asnm.tier1.all <- as.data.frame(asnm.tier1.all)
+asnm.tier1.all[cols] <- lapply(asnm.tier1.all[cols], log10) # make the aed50s in log10-mg/kg/day
+
+asnm.tier1.all <- asnm.tier1.all %>%
+  group_by(dsstox_substance_id) %>%
+  summarise_if(is.numeric, min, na.rm=TRUE)
+
+```
+
+```{r, warning=FALSE}
+asnm.tier1.all <- as.data.table(asnm.tier1.all)
+# convert all Inf to NA
+for (j in 1:ncol(asnm.tier1.all)) set(asnm.tier1.all, which(is.infinite(asnm.tier1.all[[j]])), j, NA)
+
+```
+
+* There's a few chemicals we just can't run
+
+```{r, warning=FALSE}
+
+dtxsids.aeds <- unique(asnm.tier1.all[,dsstox_substance_id])
+
+apcra.list[!DTXSID %in% dtxsids.aeds]
+
+
+```
+
+## Determine substances for which steady state is a poor assumption
+
+```{r, warning=FALSE}
+
+for (this.chem in asnm.tier1.all$dsstox_substance_id)
+{
+  skip_to_next <- FALSE
+  tryCatch(
+  out <- calc_css(dtxsid = this.chem,
+         species= 'Human',
+            output.units = 'uM',
+            daily.dose=1,
+            doses.per.day=1,
+            tissue = 'plasma',
+            model = 'pbtk',
+         f=0.001,
+         adjusted.Funbound.plasma = TRUE,
+            restrictive.clearance = TRUE,
+            well.stirred.correction =TRUE),
+  error = function(e) {skip_to_next <<-TRUE})
+  if(skip_to_next){next}
+  index <- asnm.tier1.all$dsstox_substance_id==this.chem
+  asnm.tier1.all[index, "the.day"] <- out["the.day"] 
+}
+
+```
+
+
+
+```{r, warning=FALSE, eval=FALSE, echo=FALSE}
+
+for (i in pbtk.have$dsstox_substance_id){
+#for (i in 1:nrow(asnm.tier1.all)) {
+  
+  skip_to_next <- FALSE
+  tryCatch(
+  css.out <- calc_css(dtxsid = pbtk.have$dsstox_substance_id[i],
+                      species = 'Human',
+                      output.units = 'uM',
+                      daily.dose = 1,
+                      default.to.human = TRUE,
+                      doses.per.day = 1,
+                      tissue = 'plasma',
+                      model = 'pbtk',
+                      adjusted.Funbound.plasma = TRUE,
+                      well.stirred.correction = TRUE,
+                      restrictive.clearance = TRUE,
+                      f = 0.001,
+                      suppress.messages = TRUE),
+  
+  error = function(e) {
+    message(paste("CSS can't be found for: ", pbtk.have$dsstox_substance_id[i]))
+    message("Here's the error message:")
+    message(e)
+    pbtk.have$the.day[i] <<- as.numeric(NA)
+    skip_to_next <<- TRUE
+    
+  },
+  warning = function(cond) {
+    message(paste("calc_css caused a warning for: ", pbtk.have$dsstox_substance_id[i]))
+    message("Here's the original warning message:")
+    message(cond)
+    pbtk.have[i] <<- as.numeric(NA)
+    skip_to_next <<- TRUE
+    
+  })
+  
+  if(skip_to_next){next}
+  pbtk.have$the.day[i] <- css.out$the.day
+  
+}
+
+
+asnm.tier1.all$the.day <- pbtk.have$the.day[match(asnm.tier1.all$dsstox_substance_id,
+                                                              pbtk.have$dsstox_substance_id)]
+```
+
+
+
+
+
+
+
+
+```{r deprecated-fxn-cssday, warning=FALSE, eval=FALSE, echo=FALSE}
+
+for (this.chem in asnm.tier1.arith.pbtk$dsstox_substance_id)
+{
+  skip_to_next <- FALSE
+  tryCatch(
+  out <- calc_css(dtxsid = this.chem,
+         species= 'Human',
+            output.units = 'uM',
+            daily.dose=1,
+            doses.per.day=1,
+            tissue = 'plasma',
+            model = 'pbtk',
+         f=0.001,
+         adjusted.Funbound.plasma = TRUE,
+            restrictive.clearance = TRUE,
+            well.stirred.correction =TRUE),
+  error = function(e) {
+    message(paste("CSS can't be found for: ", asnm.tier1.arith.pbtk$dsstox_substance_id[i]))
+    #message(paste("CSS can't be found for: ", this.chem[i]))
+    message("Here's the error message:")
+    message(e)
+    asnm.tier1.arith.pbtk$the.day[i] <<- as.numeric(NA)
+    skip_to_next <<-TRUE
+    },
+  warning = function(cond) {
+    #message(paste("calc_css caused a warning for: ", asnm.tier1.arith.pbtk$dsstox_substance_id[i]))
+    message(paste("calc_css caused a warning for: ", this.chem[i]))
+    message("Here's the original warning message:")
+    message(cond)
+    asnm.tier1.arith.pbtk$the.day[i] <<- as.numeric(NA)
+    skip_to_next <<- TRUE
+})
+  if(skip_to_next){next}
+  index <- asnm.tier1.arith.pbtk$dsstox_substance_id==this.chem
+  asnm.tier1.arith.pbtk[index, "Human.day.Css.pbtk"] <- out["the.day"] 
+}
+
+asnm.tier1.all$the.day <- asnm.tier1.arith.pbtk$the.day[match(asnm.tier1.all$dsstox_substance_id,
+                                                              asnm.tier1.arith.pbtk$dsstox_substance_id)]
+
+```
+
+* 20 chemicals have a Css day > 90 days
+
+```{r, warning=FALSE}
+
+asnm.tier1.all[the.day>90]
+
+```
+
+## Create the ifelse to take the correct AED50
+
+```{r, warning=FALSE}
+asnm.tier1.all <- as.data.table(asnm.tier1.all)
+asnm.tier1.all[ , aed50.atg := ifelse(!is.na(aed50.pbtk.atg), aed50.pbtk.atg, aed50.3compss.atg)]
+asnm.tier1.all[ , aed50.bsk := ifelse(!is.na(aed50.pbtk.bsk), aed50.pbtk.bsk, aed50.3compss.bsk)]
+asnm.tier1.all[ , aed50.ccte := ifelse(!is.na(aed50.pbtk.ccte), aed50.pbtk.ccte, aed50.3compss.ccte)]
+asnm.tier1.all[ , aed50.nvs := ifelse(!is.na(aed50.pbtk.nvs), aed50.pbtk.nvs, aed50.3compss.nvs)]
+asnm.tier1.all[ , aed50.stm := ifelse(!is.na(aed50.pbtk.stm), aed50.pbtk.stm, aed50.3compss.stm)]
+asnm.tier1.all[ , aed50.httr.mcf7 := ifelse(!is.na(aed50.pbtk.httr.mcf7.sigbmd), aed50.pbtk.httr.mcf7.sigbmd, aed50.3compss.httr.mcf7.sigbmd)]
+asnm.tier1.all[ , aed50.httr.u2os := ifelse(!is.na(aed50.pbtk.httr.u2os.sigbmd), aed50.pbtk.httr.u2os.sigbmd, aed50.3compss.httr.u2os.sigbmd)]
+asnm.tier1.all[ , aed50.httr.heparg := ifelse(!is.na(aed50.pbtk.httr.heparg.sigbmd), aed50.pbtk.httr.heparg.sigbmd, aed50.3compss.httr.heparg.sigbmd)]
+asnm.tier1.all[ , aed50.htpp.u2os := ifelse(!is.na(aed50.pbtk.htpp.u2os), aed50.pbtk.htpp.u2os, aed50.3compss.htpp.u2os)]
+asnm.tier1.all[ , aed50.astar.beas2b := ifelse(!is.na(aed50.pbtk.astar.beas2b), aed50.pbtk.astar.beas2b, aed50.3compss.astar.beas2b)]
+asnm.tier1.all[ , aed50.astar.hepg2 := ifelse(!is.na(aed50.pbtk.astar.hepg2), aed50.pbtk.astar.hepg2, aed50.3compss.astar.hepg2)]
+asnm.tier1.all[ , aed50.astar.hek293 := ifelse(!is.na(aed50.pbtk.astar.hek293), aed50.pbtk.astar.hek293, aed50.3compss.astar.hek293)]
+colnames(asnm.tier1.all)
+```
+
+## Add in ToxVal Summary values
+I calculated different %-iles of ToxVal and we want to add them here.
+First we clean up the %-iles of ToxVal data.
+```{r, warning=FALSE}
+# Ensure columns are numeric and also log10 transform the quantiles that were calculated
+col.num <- c("apcra.ret.5p.POD", "p5.toxval.numeric","p10.toxval.numeric","p15.toxval.numeric","p20.toxval.numeric",    "p25.toxval.numeric","p30.toxval.numeric")
+toxval.apcra.summary <- toxval.apcra.summary[, (col.num) := lapply(.SD, function(x) log10(x)), .SDcols = col.num ]
+
+# Do the same procedure with the subchronic-only data
+col.num <- c("p5.toxval.numeric.sub","p10.toxval.numeric.sub","p15.toxval.numeric.sub","p20.toxval.numeric.sub","p25.toxval.numeric.sub","p30.toxval.numeric.sub")
+toxval.apcra.summary.subchronic <- toxval.apcra.summary.subchronic[, (col.num) := lapply(.SD, function(x) log10(x)), .SDcols = col.num ]
+
+```
+
+Here we merge the %-iles of ToxVal data with the AED values in a datatable called asnm.tier1.all.
+```{r, warning=FALSE}
+
+asnm.tier1.all <- merge.data.table(asnm.tier1.all,
+                                    toxval.apcra.summary[,c("dtxsid",
+                                                            "p5.toxval.numeric",
+                                                            "p10.toxval.numeric",
+                                                            "p15.toxval.numeric",
+                                                            "p20.toxval.numeric",
+                                                            "p25.toxval.numeric",
+                                                            "p30.toxval.numeric"
+                                                          )],
+                                    by.x='dsstox_substance_id',
+                                    by.y='dtxsid',
+                                   all.x = TRUE)
+
+asnm.tier1.all <- merge.data.table(asnm.tier1.all,
+                                    toxval.apcra.summary.subchronic[,c("dtxsid",
+                                                            "p5.toxval.numeric.sub",
+                                                            "p10.toxval.numeric.sub",
+                                                            "p15.toxval.numeric.sub",
+                                                            "p20.toxval.numeric.sub",
+                                                            "p25.toxval.numeric.sub",
+                                                            "p30.toxval.numeric.sub"
+                                                          )],
+                                    by.x='dsstox_substance_id',
+                                    by.y='dtxsid',
+                                   all.x = TRUE)
+
+asnm.tier1.all <- merge.data.table(asnm.tier1.all, 
+                                   ad.tbl,
+                                   by.x='dsstox_substance_id',
+                                   by.y='DTXSID',
+                                   all.x=TRUE)
+colnames(asnm.tier1.all)
+```
+
+# Evaluating AEDs {.tabset .tabset-fade .tabset-pills}
+
+## Baseline random forest model
+
+```{r, warning=FALSE}
+
+#dput(colnames(asnm.tier1.all))
+# infer the median for the chemical for any missing (NA) data by giving median by row (median by chemical)
+cols <- c("aed50.atg", 
+"aed50.bsk", "aed50.ccte", "aed50.nvs", "aed50.stm", "aed50.httr.mcf7", 
+"aed50.httr.u2os", "aed50.httr.heparg", "aed50.htpp.u2os", "aed50.astar.beas2b", 
+"aed50.astar.hepg2", "aed50.astar.hek293")
+
+asnm.tier1.all3 <- as.data.frame(asnm.tier1.all)
+
+# replace NA by the median for each row
+asnm.tier1.all3[cols] <- t(apply(asnm.tier1.all3[cols], 1, function(x)
+  replace(x, is.na(x), median(x, na.rm=TRUE))))
+
+asnm.tier1.pred3 <- as.data.table(asnm.tier1.all3)
+
+asnm.tier1.pred3 <- asnm.tier1.pred3[!is.na(p5.toxval.numeric)]
+asnm.tier1.pred3 <- asnm.tier1.pred3[!is.na(aed50.3compss.5pacc)]
+
+```
+
+## Random Forest in Caret for Prediction
+
+```{r, warning=FALSE}
+colnames(asnm.tier1.pred3)
+
+```
+
+There are 156 chemicals where we can actually compare to in vivo data from ToxVal in a "baseline" RF model for the AEDs by source.
+
+### Using ToxVal POD 5th%-ile
+
+```{r, warning=FALSE}
+set.seed(1234567)
+
+control <- trainControl(method='repeatedcv',
+                        number=10,
+                        repeats=3)
+
+metric <- "Accuracy"
+
+mtry <- sqrt(12)
+tunegrid <- expand.grid(.mtry=mtry)
+
+rf_aedtriage5 <- train(data=asnm.tier1.pred3[,c(29:41)],
+                    p5.toxval.numeric~.,
+                    method='rf',
+                    metric='RMSE',
+                    tunegrid=tunegrid,
+                    trControl=control
+                    )
+print(rf_aedtriage5)
+```
+### Using ToxVal POD 10th%-ile
+
+```{r, warning=FALSE}
+
+control <- trainControl(method='repeatedcv',
+                        number=10,
+                        repeats=3)
+
+metric <- "Accuracy"
+
+mtry <- sqrt(12)
+tunegrid <- expand.grid(.mtry=mtry)
+
+rf_aedtriage10 <- train(data=asnm.tier1.pred3[,c(29:40, 42)],
+                    p10.toxval.numeric~.,
+                    method='rf',
+                    metric='RMSE',
+                    tunegrid=tunegrid,
+                    trControl=control
+                    )
+print(rf_aedtriage10)
+
+```
+
+### Using ToxVal POD 15th%-ile
+
+```{r, warning=FALSE}
+
+control <- trainControl(method='repeatedcv',
+                        number=10,
+                        repeats=3)
+
+metric <- "Accuracy"
+
+mtry <- sqrt(12)
+tunegrid <- expand.grid(.mtry=mtry)
+
+rf_aedtriage15 <- train(data=asnm.tier1.pred3[,c(29:40, 43)],
+                    p15.toxval.numeric~.,
+                    method='rf',
+                    metric='RMSE',
+                    tunegrid=tunegrid,
+                    trControl=control
+                    )
+print(rf_aedtriage15)
+
+```
+
+### Using ToxVal POD 20th%-ile
+
+```{r, warning=FALSE}
+
+control <- trainControl(method='repeatedcv',
+                        number=10,
+                        repeats=3)
+
+metric <- "Accuracy"
+
+mtry <- sqrt(12)
+tunegrid <- expand.grid(.mtry=mtry)
+
+rf_aedtriage20 <- train(data=asnm.tier1.pred3[,c(29:40, 44)],
+                    p20.toxval.numeric~.,
+                    method='rf',
+                    metric='RMSE',
+                    tunegrid=tunegrid,
+                    trControl=control
+                    )
+print(rf_aedtriage20)
+
+```
+
+### Using ToxVal POD 25th%-ile
+
+```{r, warning=FALSE}
+
+control <- trainControl(method='repeatedcv',
+                        number=10,
+                        repeats=3,
+                        savePredictions = TRUE)
+
+metric <- "Accuracy"
+
+mtry <- sqrt(12)
+tunegrid <- expand.grid(.mtry=mtry)
+
+rf_aedtriage25 <- train(data=asnm.tier1.pred3[,c(29:40, 45)],
+                    p25.toxval.numeric~.,
+                    method='rf',
+                    metric='RMSE',
+                    tunegrid=tunegrid,
+                    trControl=control
+                    )
+print(rf_aedtriage25)
+
+```
+
+### Using ToxVal POD 30th%-ile
+
+```{r, warning=FALSE}
+
+control <- trainControl(method='repeatedcv',
+                        number=10,
+                        repeats=3)
+
+metric <- "Accuracy"
+
+mtry <- sqrt(12)
+tunegrid <- expand.grid(.mtry=mtry)
+
+rf_aedtriage30 <- train(data=asnm.tier1.pred3[,c(29:40, 46)],
+                    p30.toxval.numeric~.,
+                    method='rf',
+                    metric='RMSE',
+                    tunegrid=tunegrid,
+                    trControl=control
+                    )
+print(rf_aedtriage30)
+
+```
+
+### Compare the minimum AED50 to ToxVal POD
+* defining the minimum AED50 without CCTE-MEA does a little better on the whole
+
+```{r, warning=FALSE}
+
+#Calculate minimum of the minimum AED50 by source
+asnm.tier1.pred3[,min.aed50 := min(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm, aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, aed50.astar.beas2b, 
+aed50.astar.hepg2, aed50.astar.hek293, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+asnm.tier1.pred3[,min.aed50 := as.numeric(min.aed50)]
+
+```
+
+```{r, warning=FALSE}
+
+# min AED vs toxval 5th %ile
+aed.toxval5 <- lm(p5.toxval.numeric ~ min.aed50, 
+            data= asnm.tier1.pred3)
+summary(aed.toxval5)
+aed.toxval5.rmse <- round(sqrt(mean(aed.toxval5$residuals^2)),3)
+aed.toxval5.r2 <- round(summary(aed.toxval5)$r.squared,3)
+
+# min AED vs toxval 10th %ile
+aed.toxval10 <- lm(p10.toxval.numeric ~ min.aed50, 
+            data= asnm.tier1.pred3)
+summary(aed.toxval10)
+aed.toxval10.rmse <- round(sqrt(mean(aed.toxval10$residuals^2)),3)
+aed.toxval10.r2 <- round(summary(aed.toxval10)$r.squared,3)
+
+# min AED vs toxval 15th %ile
+aed.toxval15 <- lm(p15.toxval.numeric ~ min.aed50, 
+            data= asnm.tier1.pred3)
+summary(aed.toxval15)
+aed.toxval15.rmse <- round(sqrt(mean(aed.toxval15$residuals^2)),3)
+aed.toxval15.r2 <- round(summary(aed.toxval15)$r.squared,3)
+
+# min AED vs toxval 20th %ile
+aed.toxval20 <- lm(p20.toxval.numeric ~ min.aed50, 
+            data= asnm.tier1.pred3)
+summary(aed.toxval20)
+aed.toxval20.rmse <- round(sqrt(mean(aed.toxval20$residuals^2)),3)
+aed.toxval20.r2 <- round(summary(aed.toxval20)$r.squared,3)
+
+# min AED vs toxval 25th %ile
+aed.toxval25 <- lm(p25.toxval.numeric ~ min.aed50, 
+            data= asnm.tier1.pred3)
+summary(aed.toxval25)
+aed.toxval25.rmse <- round(sqrt(mean(aed.toxval25$residuals^2)),3)
+aed.toxval25.r2 <- round(summary(aed.toxval25)$r.squared,3)
+
+# min AED vs toxval 30th %ile
+aed.toxval30 <- lm(p30.toxval.numeric ~ min.aed50, 
+            data= asnm.tier1.pred3)
+summary(aed.toxval30)
+aed.toxval30.rmse <- round(sqrt(mean(aed.toxval30$residuals^2)),3)
+aed.toxval30.r2 <- round(summary(aed.toxval30)$r.squared,3)
+```
+
+### Median AED50 vs ToxVal PODs
+
+Calculate the median AED50
+
+```{r, warning=FALSE}
+# Calcualte median
+asnm.tier1.pred3[,med.aed50 := median(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm, aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, aed50.astar.beas2b, 
+aed50.astar.hepg2, aed50.astar.hek293, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+```
+
+Compute model for different ToxVal PODs
+First show med AED50 v 5th %ile POD
+
+```{r, warning=FALSE}
+
+# med AED vs toxval 5th %ile
+aedmed.toxval5 <- lm(p5.toxval.numeric ~ med.aed50, 
+            data= asnm.tier1.pred3)
+summary(aedmed.toxval5)
+aedmed.toxval5.rmse <- round(sqrt(mean(aedmed.toxval5$residuals^2)),3)
+aedmed.toxval5.r2 <- round(summary(aedmed.toxval5)$r.squared,3)
+
+# med AED vs toxval 10th %ile
+aedmed.toxval10 <- lm(p10.toxval.numeric ~ med.aed50, 
+            data= asnm.tier1.pred3)
+#summary(aedmed.toxval10)
+aedmed.toxval10.rmse <- round(sqrt(mean(aedmed.toxval10$residuals^2)),3)
+aedmed.toxval10.r2 <- round(summary(aedmed.toxval10)$r.squared,3)
+
+# med AED vs toxval 15th %ile
+aedmed.toxval15 <- lm(p15.toxval.numeric ~ med.aed50, 
+            data= asnm.tier1.pred3)
+#summary(aedmed.toxval15)
+aedmed.toxval15.rmse <- round(sqrt(mean(aedmed.toxval15$residuals^2)),3)
+aedmed.toxval15.r2 <- round(summary(aedmed.toxval15)$r.squared,3)
+
+# med AED vs toxval 20th %ile
+aedmed.toxval20 <- lm(p20.toxval.numeric ~ med.aed50, 
+            data= asnm.tier1.pred3)
+#summary(aedmed.toxval20)
+aedmed.toxval20.rmse <- round(sqrt(mean(aedmed.toxval20$residuals^2)),3)
+aedmed.toxval20.r2 <- round(summary(aedmed.toxval20)$r.squared,3)
+```
+
+Here show med AED50 vs 25th%-ile POD
+```{r, warning=FALSE}
+# med AED vs toxval 25th %ile
+aedmed.toxval25 <- lm(p25.toxval.numeric ~ med.aed50, 
+            data= asnm.tier1.pred3)
+summary(aedmed.toxval25)
+aedmed.toxval25.rmse <- round(sqrt(mean(aedmed.toxval25$residuals^2)),3)
+aedmed.toxval25.r2 <- round(summary(aedmed.toxval25)$r.squared,3)
+
+# med AED vs toxval 30th %ile
+aedmed.toxval30 <- lm(p30.toxval.numeric ~ med.aed50, 
+            data= asnm.tier1.pred3)
+#summary(aedmed.toxval30)
+aedmed.toxval30.rmse <- round(sqrt(mean(aedmed.toxval30$residuals^2)),3)
+aedmed.toxval30.r2 <- round(summary(aedmed.toxval30)$r.squared,3)
+
+```
+
+### MLR model for 5th%ile ToxVal
+
+Make a simple MLR model that allows the AED50s by source to independently contribute to 5th %-ile ToxVal POD prediction.
+
+```{r, warning=FALSE}
+set.seed(123456)
+
+model.aedtriage5.asnm <- lm(p5.toxval.numeric ~ 0
+                 + aed50.atg
+                 + aed50.bsk
+                 + aed50.ccte
+                 + aed50.nvs
+                 + aed50.stm
+                 + aed50.httr.mcf7
+                 + aed50.httr.u2os
+                 + aed50.httr.heparg
+                 + aed50.htpp.u2os
+                 + aed50.astar.beas2b
+                 + aed50.astar.hepg2
+                 + aed50.astar.hek293, data=asnm.tier1.pred3)
+anova(model.aedtriage5.asnm)
+
+```
+Then evaluate the model and its assumptions.
+
+```{r, warning=FALSE, fig.height=9,fig.width=7}
+par(mfrow=c(3,2))
+plot(model.aedtriage5.asnm, which=c(1,2,3,4,5))
+```
+
+
+
+```{r, warning=FALSE}
+summary(model.aedtriage5.asnm)
+sigma(model.aedtriage5.asnm)/mean(asnm.tier1.pred3$p5.toxval.numeric)
+```
+```{r, warning=FALSE}
+coeff.tbl <- as.data.frame(model.aedtriage5.asnm$coefficients)
+coeff.tbl$var_name <- row.names(coeff.tbl)
+names(coeff.tbl)[1] <- "mlr_coeff"
+coeff.tbl <- as.data.table(coeff.tbl)
+```
+
+```{r, warning=FALSE}
+asnm.tier1.pred3[,mlr.aed50.toxval5 := (coeff.tbl[var_name=="aed50.atg"]$mlr_coeff)*aed50.atg 
+                + (coeff.tbl[var_name=="aed50.bsk"]$mlr_coeff)*aed50.bsk
+                 + (coeff.tbl[var_name=="aed50.ccte"]$mlr_coeff)*aed50.ccte
+                 + (coeff.tbl[var_name=="aed50.nvs"]$mlr_coeff)*aed50.nvs
+                 + (coeff.tbl[var_name=="aed50.stm"]$mlr_coeff)*aed50.stm
+                 + (coeff.tbl[var_name=="aed50.httr.mcf7"]$mlr_coeff)*aed50.httr.mcf7
+                 + (coeff.tbl[var_name=="aed50.httr.u2os"]$mlr_coeff)*aed50.httr.u2os
+                 + (coeff.tbl[var_name=="aed50.httr.heparg"]$mlr_coeff)*aed50.httr.heparg
+                 + (coeff.tbl[var_name=="aed50.htpp.u2os"]$mlr_coeff)*aed50.htpp.u2os
+                 + (coeff.tbl[var_name=="aed50.astar.beas2b"]$mlr_coeff)*aed50.astar.beas2b
+                 + (coeff.tbl[var_name=="aed50.astar.hepg2"]$mlr_coeff)*aed50.astar.hepg2
+                 + (coeff.tbl[var_name=="aed50.astar.hek293"]$mlr_coeff)*aed50.astar.hek293] 
+
+```
+
+### MLR model for 25th%ile ToxVal
+
+Create the linear model for the 25th %ile ToxVal POD.
+
+```{r, warning=FALSE}
+set.seed(123456)
+
+model.aedtriage25.asnm <- lm(p25.toxval.numeric ~ 0
+                 + aed50.atg
+                 + aed50.bsk
+                 + aed50.ccte
+                 + aed50.nvs
+                 + aed50.stm
+                 + aed50.httr.mcf7
+                 + aed50.httr.u2os
+                 + aed50.httr.heparg
+                 + aed50.htpp.u2os
+                 + aed50.astar.beas2b
+                 + aed50.astar.hepg2
+                 + aed50.astar.hek293, data=asnm.tier1.pred3)
+anova(model.aedtriage25.asnm)
+
+```
+Evaluate assumptions of the model.
+
+```{r, warning=FALSE, fig.height=9,fig.width=7}
+par(mfrow=c(3,2))
+plot(model.aedtriage5.asnm, which=c(1,2,3,4,5))
+```
+
+Summarize the model.
+
+```{r, warning=FALSE}
+summary(model.aedtriage25.asnm)
+sigma(model.aedtriage5.asnm)/mean(asnm.tier1.pred3$p25.toxval.numeric)
+```
+
+Build a coefficients table.
+
+```{r, warning=FALSE}
+coeff.tbl25 <- as.data.frame(model.aedtriage25.asnm$coefficients)
+coeff.tbl25$var_name <- row.names(coeff.tbl25)
+names(coeff.tbl25)[1] <- "mlr_coeff"
+coeff.tbl25 <- as.data.table(coeff.tbl25)
+```
+
+Make the MLR prediction for the 25th %ile ToxVal POD using the coefficients of the model.
+
+```{r, warning=FALSE}
+asnm.tier1.pred3[,mlr.aed50.toxval25 := (coeff.tbl25[var_name=="aed50.atg"]$mlr_coeff)*aed50.atg 
+                + (coeff.tbl25[var_name=="aed50.bsk"]$mlr_coeff)*aed50.bsk
+                 + (coeff.tbl25[var_name=="aed50.ccte"]$mlr_coeff)*aed50.ccte
+                 + (coeff.tbl25[var_name=="aed50.nvs"]$mlr_coeff)*aed50.nvs
+                 + (coeff.tbl25[var_name=="aed50.stm"]$mlr_coeff)*aed50.stm
+                 + (coeff.tbl25[var_name=="aed50.httr.mcf7"]$mlr_coeff)*aed50.httr.mcf7
+                 + (coeff.tbl25[var_name=="aed50.httr.u2os"]$mlr_coeff)*aed50.httr.u2os
+                 + (coeff.tbl25[var_name=="aed50.httr.heparg"]$mlr_coeff)*aed50.httr.heparg
+                 + (coeff.tbl25[var_name=="aed50.htpp.u2os"]$mlr_coeff)*aed50.htpp.u2os
+                 + (coeff.tbl25[var_name=="aed50.astar.beas2b"]$mlr_coeff)*aed50.astar.beas2b
+                 + (coeff.tbl25[var_name=="aed50.astar.hepg2"]$mlr_coeff)*aed50.astar.hepg2
+                 + (coeff.tbl25[var_name=="aed50.astar.hek293"]$mlr_coeff)*aed50.astar.hek293] 
+
+```
+
+### Add in MLR predictions to spreadsheet
+
+```{r, warning=FALSE}
+colnames(asnm.tier1.pred3)
+asnm.tier1.pred3[, mlr.pred5 := predict(model.aedtriage5.asnm, .SD), .SDcols = c(29:41)]
+asnm.tier1.pred3[, mlr.pred25 := predict(model.aedtriage25.asnm, .SD), .SDcols = c(29:40,45)]
+```
+
+Calculate the RMSE and R2 on the MLR models.
+
+```{r, warning=FALSE}
+model.aedtriage5.asnm.rmse <- round(sqrt(mean(model.aedtriage5.asnm$residuals^2)),3)
+model.aedtriage5.asnm.r2 <- round(summary(model.aedtriage5.asnm)$r.squared,3)
+
+model.aedtriage25.asnm.rmse <- round(sqrt(mean(model.aedtriage25.asnm$residuals^2)),3)
+model.aedtriage25.asnm.r2 <- round(summary(model.aedtriage25.asnm)$r.squared,3)
+```
+
+Gutcheck: look at the distribution of values from the MLR models.
+
+```{r, warning=FALSE}
+
+ggplot(asnm.tier1.pred3)+
+  geom_histogram(aes(x=asnm.tier1.pred3$mlr.pred5), fill='orange', alpha=0.2)+
+  geom_histogram(aes(x=asnm.tier1.pred3$mlr.pred25), fill='blue', alpha=0.2)+
+  theme_bw()+
+  scale_x_continuous(breaks=seq(-2,6,1))+
+  xlab("MLR Predicted POD, log10-mg/kg/day")+
+  ylab("Frequency")
+```
+
+I tried adding in RF models for 5th and 25th percentile ToxVal POD.
+However what you find is how inappropriate it is to use the RF model to predict the data it was trained on. The performance values are artificially inflated.
+So these RF predictions were removed because basically all we can look at is training performance.
+
+```{r, warning=FALSE, eval=FALSE}
+
+asnm.tier1.pred3[, rf.pred5 := predict(rf_aedtriage5, .SD), .SDcols = c(29:41)]
+asnm.tier1.pred3[, rf.pred25 := predict(rf_aedtriage25, .SD), .SDcols = c(29:40,45)]
+asnm.tier1.pred3[,c('rf.pred5',
+                     'rf.pred25'):= NULL]
+```
+
+# Visualization and Comparison {.tabset .tabset-fade .tabset-pills}
+
+## AED50 by source VS. ToxVal PODs
+
+Need longformat of all AED50 values by source and ToxVal PODs.
+```{r, warning=FALSE}
+
+asnm.tier1.pred3.long <- melt.data.table(asnm.tier1.pred3,
+                                         id.vars = c('dsstox_substance_id',
+                                                     'p5.toxval.numeric',
+                                                     'p25.toxval.numeric',
+                                                     'p5.toxval.numeric.sub',
+                                                     'p25.toxval.numeric.sub'),
+                                         measure.vars = c('aed50.atg', 
+                                                          'aed50.bsk',
+                                                          'aed50.ccte',
+                                                          'aed50.nvs',
+                                                          'aed50.stm',
+                                                          'aed50.httr.mcf7',
+                                                          'aed50.httr.u2os',
+                                                          'aed50.httr.heparg',
+                                                          'aed50.htpp.u2os',
+                                                          'aed50.astar.beas2b',
+                                                          'aed50.astar.hepg2',
+                                                          'aed50.astar.hek293'),
+                                         variable.name = c('aed50.type'),
+                                         value.name = c('aed50'))
+
+asnm.tier1.pred3.long <- melt.data.table(asnm.tier1.pred3.long,
+                                         id.vars=c('dsstox_substance_id',
+                                                   'aed50.type',
+                                                   'aed50'),
+                                         measure.vars=c('p5.toxval.numeric',
+                                                     'p25.toxval.numeric',
+                                                     'p5.toxval.numeric.sub',
+                                                     'p25.toxval.numeric.sub'),
+                                         variable.name=c('pod.type'),
+                                         value.name = c('pod'))
+
+```
+
+```{r, warning=FALSE, fig.height=4, fig.width=7}
+
+aed.asnm.lm <- ggplot(data=asnm.tier1.pred3.long[pod.type %in% c('p5.toxval.numeric','p25.toxval.numeric')], 
+                 aes(x=aed50, y=pod, color=aed50.type))+
+  geom_point(aes(x=aed50, y=pod, color=aed50.type), alpha=0.5, size=2)+
+  scale_color_viridis(discrete=TRUE, name='AED50 Source')+
+  scale_x_continuous(breaks=seq(-7, 5, 1))+
+  scale_y_continuous(breaks=seq(-7, 5, 1))+
+  coord_cartesian(xlim=c(-4,4), ylim=c(-4,4))+
+  #coord_cartesian(xlim=c(0.0001, 10000000000), ylim=c(0.0000001, 10000000000))+
+  theme_bw()+
+  #geom_smooth(method='lm',se=FALSE,color='blue',formula=y~x)+
+  #stat_poly_eq(formula=y ~x,
+  #             eq.with.lhs = "y~`=`~",
+  #             aes(label=paste0("atop(", ..eq.label.., ",", ..rr.label.., ")")),
+  #             parse=TRUE)+
+  geom_abline(color='black')+
+  xlab('AED50, log10-mg/kg/day')+
+  ylab('ToxVal POD, log10-mg/kg/day')+
+   theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14))+
+  #geom_smooth(method='lm',se=FALSE,color='blue',formula=y~x)+
+  #stat_poly_eq(formula=y ~x,
+  #             eq.with.lhs = "italic(hat(y))~`=`~",
+  #             aes(label=paste(..eq.label.., ..rr.label.., sep ="~~~")),
+  #             parse=TRUE)+
+  facet_wrap(~pod.type, scales='fixed')+
+  theme(strip.background = element_rect(fill='white',size=1),
+        strip.text = element_text(size=10, color='black',face='bold'))
+
+aed.asnm.lm
+
+```
+## Min, Med, MLR, RF
+
+```{r, warning=FALSE}
+
+colnames(asnm.tier1.pred3)
+```
+
+Need longformat of all AED50 values by source and ToxVal PODs.
+```{r, warning=FALSE}
+
+asnm.tier1.pred3.long2 <- melt.data.table(asnm.tier1.pred3,
+                                         id.vars = c('dsstox_substance_id',
+                                                     'p5.toxval.numeric',
+                                                     'p25.toxval.numeric'),
+                                         measure.vars = c('min.aed50',
+                                                          'med.aed50',
+                                                          'mlr.pred5',
+                                                          'mlr.pred25'),
+                                         variable.name = c('model.type'),
+                                         value.name = c('model.value'))
+
+asnm.tier1.pred3.long2 <- melt.data.table(asnm.tier1.pred3.long2,
+                                         id.vars=c('dsstox_substance_id',
+                                                   'model.type',
+                                                   'model.value'),
+                                         measure.vars=c('p5.toxval.numeric',
+                                                     'p25.toxval.numeric'),
+                                         variable.name=c('pod.type'),
+                                         value.name = c('pod'))
+
+```
+
+Create a summary table of model with R2 and RMSE.
+
+```{r, warning=FALSE}
+
+model.type <- c('min AED50',
+                'min AED50',
+                'min AED50',
+                'min AED50',
+                'min AED50',
+                'min AED50',
+                'med AED50',
+                'med AED50',
+                'med AED50',
+                'med AED50',
+                'med AED50',
+                'med AED50',
+                'mlr AED50',
+                'mlr AED50',
+                'rf AED50',
+                'rf AED50')
+
+pod.type <- c('ToxVal 5th%ile',
+              'ToxVal 10th%ile',
+              'ToxVal 15th%ile',
+              'ToxVal 20th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 30th%ile',
+              'ToxVal 5th%ile',
+              'ToxVal 10th%ile',
+              'ToxVal 15th%ile',
+              'ToxVal 20th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 30th%ile',
+              'ToxVal 5th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 5th%ile',
+              'ToxVal 25th%ile')
+
+RMSE <- c(aed.toxval5.rmse,
+          aed.toxval10.rmse,
+          aed.toxval15.rmse,
+          aed.toxval20.rmse,
+          aed.toxval25.rmse,
+          aed.toxval30.rmse,
+          aedmed.toxval5.rmse,
+          aedmed.toxval10.rmse,
+          aedmed.toxval15.rmse,
+          aedmed.toxval20.rmse,
+          aedmed.toxval25.rmse,
+          aedmed.toxval30.rmse,
+          model.aedtriage5.asnm.rmse,
+          model.aedtriage25.asnm.rmse,
+          1.27,
+          1.07
+          )
+
+R2 <- c(aed.toxval5.r2,
+          aed.toxval10.r2,
+          aed.toxval15.r2,
+          aed.toxval20.r2,
+          aed.toxval25.r2,
+          aed.toxval30.r2,
+          aedmed.toxval5.r2,
+          aedmed.toxval10.r2,
+          aedmed.toxval15.r2,
+          aedmed.toxval20.r2,
+          aedmed.toxval25.r2,
+          aedmed.toxval30.r2,
+          model.aedtriage5.asnm.r2,
+          model.aedtriage25.asnm.r2,
+        0.172,
+        0.197)
+
+
+summ <- data.table(model.type,
+                   pod.type,
+                   RMSE,
+                   R2)
+
+setnames(summ, c('model.type','pod.type','RMSE','R2'),c('Model Type','ToxVal POD Type','RMSE','R2'))
+summ
+
+```
+
+
+```{r, warning=FALSE, fig.height=4, fig.width=9}
+
+# new facet labels
+model.labels <- c('Min AED50',
+                  'Med AED50',
+                  'MLR AED50 : ToxVal 25th%ile')
+names(model.labels) <- c('min.aed50','med.aed50','mlr.pred25')
+
+
+aed.model.lm <- ggplot(data=asnm.tier1.pred3.long2[pod.type %in% c('p5.toxval.numeric', 
+                                                                   'p25.toxval.numeric')
+                                                   & model.type %in% c('min.aed50',
+                                                                       'med.aed50',
+                                                                       'mlr.pred25')], 
+                 aes(x=model.value, 
+                     y=pod, 
+                     color=pod.type, shape=pod.type))+
+  geom_point(aes(x=model.value, 
+                 y=pod, 
+                 color=pod.type, shape=pod.type), alpha=0.7, size=2)+
+  scale_color_manual(name='POD Type',
+                     values=c('#481567FF','#95D840FF'),
+                     labels=c('ToxVal 5th%ile', 'ToxVal 25th%ile'),
+                     breaks = c('p5.toxval.numeric',
+                                'p25.toxval.numeric'))+
+  scale_shape_manual(name='POD Type',
+                     values=c(15,17),
+                     labels=c('ToxVal 5th%ile', 'ToxVal 25th%ile'),
+                     breaks = c('p5.toxval.numeric',
+                                'p25.toxval.numeric'))+
+  scale_x_continuous(breaks=seq(-7, 5, 1))+
+  scale_y_continuous(breaks=seq(-7, 5, 1))+
+  coord_cartesian(xlim=c(-4,4), ylim=c(-4,4))+
+  theme_bw()+
+  geom_smooth(aes(group=pod.type), method='lm',se=FALSE,formula=y~x)+
+  stat_poly_eq(
+               formula=y ~x,
+               #eq.with.lhs = "y~`=`~",
+               aes(label=paste0("atop(",..rr.label..,")")),
+               parse=TRUE,
+               #label.x=c(rep('right',3), 'left'),
+               label.y=c(-2,-4),
+               label.x=c(-3,1),
+               size=5, face='bold')+
+  geom_abline(slope=1, intercept=0) +
+  geom_abline(slope=1, intercept=1, linetype="dashed") +
+  geom_abline(slope=1, intercept=-1, linetype="dashed") +
+  xlab('AED50, log10-mg/kg/day')+
+  ylab('ToxVal POD, log10-mg/kg/day')+
+   theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14))+
+  facet_wrap(~model.type, scales='fixed', labeller = labeller(model.type=model.labels))+
+  theme(strip.background = element_rect(fill='white',size=1),
+        strip.text = element_text(size=10, color='black',face='bold'))
+
+aed.model.lm
+
+```
+
+```{r, warning=FALSE, fig.height=5}
+
+mytheme <- gridExtra::ttheme_minimal(core=list(padding.v=unit(0.1, 'mm'), padding.h=unit(0.1,'mm')))
+metric.grob <- grid.arrange(tableGrob(summ, theme=mytheme))
+#write.csv(summ, file='./output/aedmodel_performance_table.csv')
+```
+
+
+```{r, warning=FALSE, fig.width=14, fig.height=9}
+
+fig.PODNAM <- plot_grid(aed.asnm.lm,
+                        aed.model.lm, 
+                        labels=c("A","B"),
+                        label_size=18,
+                        nrow=2,
+                        align='hv',
+                        #rel_widths = c(1,2),
+                        #rel_heights = c(1,1),
+                        scale=c(0.8,1))
+
+fig.PODNAM
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/Fig_PODNAM_derivation_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=9, height=8, units='in', res=450)
+plot_grid(aed.asnm.lm,
+                        aed.model.lm, 
+                        labels=c("A","B"),
+                        label_size=18,
+                        nrow=2,
+                        align='hv',
+                        #rel_widths = c(1,2),
+                        #rel_heights = c(1,1),
+                        scale=c(0.8,1))
+dev.off()
+
+
+```
+# Putting together the data sheet {.tabset .tabset-fade .tabset-pills}
+
+```{r, warning=FALSE}
+# add in the MLR model result
+asnm.tier1.all[,mlr.toxval25.aed50 := sum((coeff.tbl25[var_name=="aed50.atg"]$mlr_coeff)*aed50.atg 
+                + (coeff.tbl25[var_name=="aed50.bsk"]$mlr_coeff)*aed50.bsk
+                 + (coeff.tbl25[var_name=="aed50.ccte"]$mlr_coeff)*aed50.ccte
+                 + (coeff.tbl25[var_name=="aed50.nvs"]$mlr_coeff)*aed50.nvs
+                 + (coeff.tbl25[var_name=="aed50.stm"]$mlr_coeff)*aed50.stm
+                 + (coeff.tbl25[var_name=="aed50.httr.mcf7"]$mlr_coeff)*aed50.httr.mcf7
+                 + (coeff.tbl25[var_name=="aed50.httr.u2os"]$mlr_coeff)*aed50.httr.u2os
+                 + (coeff.tbl25[var_name=="aed50.httr.heparg"]$mlr_coeff)*aed50.httr.heparg
+                 + (coeff.tbl25[var_name=="aed50.htpp.u2os"]$mlr_coeff)*aed50.htpp.u2os
+                 + (coeff.tbl25[var_name=="aed50.astar.beas2b"]$mlr_coeff)*aed50.astar.beas2b
+                 + (coeff.tbl25[var_name=="aed50.astar.hepg2"]$mlr_coeff)*aed50.astar.hepg2
+                 + (coeff.tbl25[var_name=="aed50.astar.hek293"]$mlr_coeff)*aed50.astar.hek293, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+
+```
+
+```{r, warning=FALSE}
+
+# take median (no ccte MEA)
+asnm.tier1.all <- asnm.tier1.all %>% rowwise() %>% mutate(med.aed50=median(c(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm, aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, aed50.astar.beas2b, 
+aed50.astar.hepg2, aed50.astar.hek293),na.rm=TRUE)) %>% data.table()
+
+# take minimum, no ccte (no MEA)
+asnm.tier1.all[,min.aed50 := min(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm, aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, aed50.astar.beas2b, 
+aed50.astar.hepg2, aed50.astar.hek293, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+# for input to hazard flag and BER calculation
+
+save(asnm.tier1.pred3, asnm.tier1.all, file= './output/aed_tbl_April2024.RData')
+
+```
+
+```{r, warning=FALSE}
+
+load(file= './output/aed_tbl_April2024.RData')
+```
+
+# Load In vivo Data {.tabset .tabset-fade .tabset-pills}
+
+## ECHA POD Information
+
+```{r, warning=FALSE}
+
+echa.repdose <- read.xlsx('./source/in_vivo/draft_apcra_pro_selection_tbl_9_Feb_2023_InVivo_screening.xlsx', sheet=3, colNames = TRUE) %>% data.table()
+```
+
+```{r, warning=FALSE}
+echa.systemic <- as.data.table(echa.repdose)
+header.true <- function(df) {
+  names(df) <- as.character(unlist(df[1,]))
+  df[-1,]
+}
+echa.systemic <- header.true(echa.systemic)
+
+echa.systemic <- echa.systemic[,c('chnm','dsstox_substance_id',
+                                  'data poor - no repeat dose toxicity data on the substance / no plans',
+                                  'Katie_quant_dose_lowest_LOAEL_mkd',
+                                  'Katie_quant_dose_lowest_NOAEL_mkd',
+                                  'Katie_422_syst_LOAEL_mkd',                                                         'Katie_422_syst_NOAEL_mkd')]
+
+colnames(echa.systemic)
+
+
+```
+
+```{r, warning=FALSE}
+
+setnames(echa.systemic, names(echa.systemic), c('chnm','dsstox_substance_id','data_poor_notes',
+                                                'OECD_407_408_LOAEL_mkd','OECD_407_408_NOAEL_mkd',
+                                                'OECD_422syst_LOAEL_mkd','OECD_422syst_NOAEL_mkd'))
+
+```
+
+```{r, warning=FALSE}
+
+echa.systemic[grep('no', data_poor_notes), data_poor_binary := 0]
+echa.systemic[grep('data generation', data_poor_notes), data_poor_binary := 0]
+# what does it mean if there's no note? Data poor?
+echa.systemic[is.na(data_poor_notes), data_poor_binary := 1]
+echa.systemic[grep('yes',data_poor_notes), data_poor_binary := 1]
+head(echa.systemic)
+
+```
+
+```{r, warning=FALSE}
+change_cols <- c('OECD_407_408_LOAEL_mkd','OECD_407_408_NOAEL_mkd',
+                                                'OECD_422syst_LOAEL_mkd','OECD_422syst_NOAEL_mkd')
+echa.systemic[, (change_cols) := lapply(.SD, as.numeric), .SDcols = change_cols]
+echa.systemic[, ECHA_min_systemic_POD_mkd := min(OECD_407_408_LOAEL_mkd,OECD_407_408_NOAEL_mkd,
+                                                OECD_422syst_LOAEL_mkd,OECD_422syst_NOAEL_mkd, na.rm=TRUE), by=chnm]
+echa.systemic[, ECHA_min_systemic_POD_mkd := lapply(.SD, as.numeric), .SDcols = 'ECHA_min_systemic_POD_mkd']
+
+for (j in 1:ncol(echa.systemic)) set(echa.systemic, which(is.infinite(echa.systemic[[j]])), j, NA)
+```
+
+```{r, warning=FALSE}
+
+nrow(echa.systemic[!is.na(ECHA_min_systemic_POD_mkd)])
+
+
+```
+## ToxVal PODs
++ Load ToxVal
++ See how many we have for each type of ToxVal and ECHA data
++ show performance in multiple panels
+
+```{r, warning=FALSE}
+
+load('./source/in_vivo/apcra_pro_toxval_v9_4_PODs.RData')
+
+```
+
+```{r, warning=FALSE}
+
+toxval.all <- merge.data.table(toxval.apcra.summary, 
+                               toxval.apcra.summary.subchronic,
+                               all.x=TRUE, all.y = TRUE, by=c('dtxsid'))
+
+toxval.all <- merge.data.table(toxval.all,
+                               apcra.list[,c('DTXSID', 'CASRN', 'preferred_name')],
+                               all.x=TRUE,
+                               all.y=TRUE,
+                               by.x=c('dtxsid'),
+                               by.y=c('DTXSID'))
+
+setnames(toxval.all, c('dtxsid'), c('dsstox_substance_id'))
+
+invivo.all <- merge.data.table(toxval.all,echa.systemic,
+                               all.x=TRUE, 
+                               all.y=TRUE, 
+                               by =c('dsstox_substance_id'))
+
+invivo.all <- invivo.all[!is.na(dsstox_substance_id)]
+
+```
+
+```{r, warning=FALSE}
+
+invivo.all[is.na(CASRN)]
+invivo.all[,c('casrn.x','name.x','chnm','name.y','casrn.y') := NULL]
+setcolorder(invivo.all, c(1,29:30,2:28,31:37))
+colnames(invivo.all)
+```
+
+
+```{r, warning=FALSE}
+kable(invivo.all,
+           filter='top', 
+          options=list(pagelength=25, autoWidth=FALSE,  scrollX=TRUE, initComplete = JS(
+    "function(settings, json) {",
+    "$('body').css({'font-family': 'Calibri'});",
+    "}"
+  )))
+
+```
+
+```{r, warning=FALSE}
+
+
+invivo.all[, log.ECHA_min_systemic_POD_mkd := log10(ECHA_min_systemic_POD_mkd)]
+
+invivo.all[, log.repdose.90d.5th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p5.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.any.5th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p5.toxval.numeric, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.90d.25th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p25.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.any.25th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p25.toxval.numeric, log.ECHA_min_systemic_POD_mkd)]
+
+nrow(invivo.all[!is.na(log.repdose.90d.5th)]) # 163 chemicals with 90d repeat dose POD
+nrow(invivo.all[!is.na(log.repdose.any.25th)]) # 167 chemicals with any repeat dose POD
+
+```
+# Compare ECHA and ToxVal values {.tabset .tabset-fade .tabset-pills}
+
+## Compare in vivo PODs
+
+```{r, warning=FALSE}
+
+# make list of linear model comparisons
+## Toxval 5p and 25 p to SUB only
+iv.mod1 <- lm(p5.toxval.numeric ~ p5.toxval.numeric.sub, 
+            data= invivo.all)
+iv.mod2 <- lm(p25.toxval.numeric ~ p25.toxval.numeric.sub, 
+            data= invivo.all)
+# ECHA min systemic to Toxval
+iv.mod3 <- lm(log.ECHA_min_systemic_POD_mkd ~ p5.toxval.numeric, 
+            data= invivo.all)
+iv.mod4 <- lm(log.ECHA_min_systemic_POD_mkd ~ p25.toxval.numeric, 
+            data= invivo.all)
+
+iv.mod1.rmse <- round(sqrt(mean(iv.mod1$residuals^2)),3)
+iv.mod1.r2 <- round(summary(iv.mod1)$r.squared,3)
+
+iv.mod2.rmse <- round(sqrt(mean(iv.mod2$residuals^2)),3)
+iv.mod2.r2 <- round(summary(iv.mod2)$r.squared,3)
+
+iv.mod3.rmse <- round(sqrt(mean(iv.mod3$residuals^2)),3)
+iv.mod3.r2 <- round(summary(iv.mod3)$r.squared,3)
+
+iv.mod4.rmse <- round(sqrt(mean(iv.mod4$residuals^2)),3)
+iv.mod4.r2 <- round(summary(iv.mod4)$r.squared,3)
+
+pod <- c('5th%ile SUB to 5th%ile',
+         '25th%ile SUB to 25%ile',
+         '5th%ile to Min ECHA',
+         '25th%ile to Min ECHA')
+
+pod.rmse <- c(iv.mod1.rmse,
+              iv.mod2.rmse,
+              iv.mod3.rmse,
+              iv.mod4.rmse)
+
+pod.r2 <- c(iv.mod1.r2,
+            iv.mod2.r2,
+            iv.mod3.r2,
+            iv.mod4.r2)
+
+
+summ.pod <- data.table(pod,
+                   pod.rmse,
+                   pod.r2)
+
+setnames(summ.pod, c('pod','pod.rmse','pod.r2'), c('POD comparison','RMSE','R2'))
+kable(summ.pod)
+
+```
+
+```{r, warning=FALSE}
+# make in vivo data long to plot
+invivo.all.long <- melt.data.table(invivo.all,
+                                         id.vars=c('dsstox_substance_id',
+                                                   'p5.toxval.numeric',
+                                                   'p25.toxval.numeric'),
+                                         measure.vars=c('p5.toxval.numeric.sub',
+                                                     'p25.toxval.numeric.sub',
+                                                     'log.ECHA_min_systemic_POD_mkd'),
+                                         variable.name=c('comparator'),
+                                         value.name = c('comparator.value'))
+
+invivo.all.long <- melt.data.table(invivo.all.long,
+                                         id.vars=c('dsstox_substance_id',
+                                                   'comparator',
+                                                   'comparator.value'),
+                                         measure.vars=c('p5.toxval.numeric',
+                                                        'p25.toxval.numeric'),
+                                         variable.name=c('toxval'),
+                                         value.name = c('toxval.value'))
+```
+
+```{r, warning=FALSE, fig.height=4, fig.width=9}
+
+# new facet labels
+comparator.labels <- c('5th %ile ToxVal SUB',
+                  '25th %ile ToxVal SUB',
+                  'Min ECHA Systemic')
+names(comparator.labels) <- c('p5.toxval.numeric.sub',
+                                                     'p25.toxval.numeric.sub',
+                                                     'log.ECHA_min_systemic_POD_mkd')
+
+
+pod.lm <- ggplot(data=invivo.all.long, 
+                 aes(x=toxval.value, 
+                     y=comparator.value, 
+                     color=toxval, shape=toxval))+
+  geom_point(aes(x=toxval.value, 
+                     y=comparator.value, 
+                     color=toxval, shape=toxval), alpha=0.7, size=2)+
+  scale_color_manual(name='ToxVal %ile',
+                     values=c('#481567FF','#95D840FF'),
+                     labels=c('ToxVal 5th%ile', 'ToxVal 25th%ile'),
+                     breaks = c('p5.toxval.numeric',
+                                'p25.toxval.numeric'))+
+  scale_shape_manual(name='ToxVal %ile',
+                     values=c(15,17),
+                     labels=c('ToxVal 5th%ile', 'ToxVal 25th%ile'),
+                     breaks = c('p5.toxval.numeric',
+                                'p25.toxval.numeric'))+
+  scale_x_continuous(breaks=seq(-7, 5, 1))+
+  scale_y_continuous(breaks=seq(-7, 5, 1))+
+  coord_cartesian(xlim=c(-4,4), ylim=c(-4,4))+
+  theme_bw()+
+  geom_smooth(aes(group=toxval), method='lm',se=FALSE,formula=y~x)+
+  stat_poly_eq(
+               formula=y ~x,
+               #eq.with.lhs = "y~`=`~",
+               aes(label=paste0("atop(",..rr.label..,")")),
+               parse=TRUE,
+               #label.x=c(rep('right',3), 'left'),
+               label.y=c(-2,-4),
+               label.x=c(-3,1),
+               size=5, face='bold')+
+  geom_abline(slope=1, intercept=0) +
+  geom_abline(slope=1, intercept=1, linetype="dashed") +
+  geom_abline(slope=1, intercept=-1, linetype="dashed") +
+  xlab('ToxVal POD, log10-mg/kg/day')+
+  ylab('Comparator POD, log10-mg/kg/day')+
+   theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14))+
+  facet_wrap(~comparator, scales='fixed', labeller = labeller(comparator=comparator.labels))+
+  theme(strip.background = element_rect(fill='white',size=1),
+        strip.text = element_text(size=10, color='black',face='bold'))
+
+pod.lm
+
+
+
+
+```
+
+
+```{r, warning=FALSE}
+
+mytheme <- gridExtra::ttheme_minimal(core=list(padding.v=unit(0.1, 'mm'), padding.h=unit(0.1,'mm')))
+metric.grob <- grid.arrange(tableGrob(summ.pod, theme=mytheme))
+```
+
+
+```{r, warning=FALSE, fig.width=10, fig.height=8}
+
+fig.PODcomp <- plot_grid(pod.lm,metric.grob,labels=c("A", "B"), rel_heights = c(1,0.5), rel_widths = c(1,0.5), label_size=18, nrow=2)
+fig.PODcomp
+
+```
+
+```{r, eval=FALSE, echo=FALSE, warning=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/Fig_POD_invivo_comp_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=9, height=7, units='in', res=450)
+fig.PODcomp <- plot_grid(pod.lm,metric.grob,labels=c("A", "B"), rel_heights = c(1,0.5), rel_widths = c(1,0.5), label_size=18, nrow=2)
+fig.PODcomp
+
+dev.off()
+ 
+
+
+```
+Merge in vivo PODs with primary data table.
+```{r, warning=FALSE}
+
+asnm.tier1.all.invivo <- merge.data.table(asnm.tier1.all, 
+                                          invivo.all[,c('dsstox_substance_id',
+                                                        "data_poor_binary",
+                                                        "ECHA_min_systemic_POD_mkd",
+                                                        "log.ECHA_min_systemic_POD_mkd",
+                                                        "log.repdose.90d.5th",
+                                                        "log.repdose.any.5th",
+                                                        "log.repdose.90d.25th",
+                                                        "log.repdose.any.25th")],
+                                          all.x = TRUE,
+                                          by='dsstox_substance_id')
+```
+
+# Comparison to TTC {.tabset .tabset-fade .tabset-pills}
+
+## in silico TTC
+
+```{r, warning=FALSE}
+# import TTC predictions
+ttc <- as.data.table(read.xlsx('./source/chem/apcra_pro_TTC.xlsx', colNames = TRUE))
+colnames(ttc)
+setnames(ttc, colnames(ttc), c('dtxsid','casrn','preferred_name','CAN_SMILES','Cramer','ug.kg.bw.day'))
+ttc$ug.kg.bw.day <- as.numeric(ttc$ug.kg.bw.day)
+```
+
+```{r, warning=FALSE}
+
+asnm.tier1.all.invivo <- merge.data.table(asnm.tier1.all.invivo,
+                                       ttc[,c('dtxsid','ug.kg.bw.day')],
+                                       by.y=c('dtxsid'),
+                                       by.x=c('dsstox_substance_id'),
+                                       all.x=TRUE)
+
+asnm.tier1.all.invivo[,ttc := log10(ug.kg.bw.day/1000)]
+asnm.tier1.all.invivo$chnm <- apcra.list$preferred_name[match(asnm.tier1.all.invivo$dsstox_substance_id,
+                                                              apcra.list$DTXSID)]
+```
+
+```{r, warning=FALSE}
+
+asnm.tier1.all.invivo[,pod.ratio := log.repdose.any.5th - med.aed50, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,ttc.ratio := log.repdose.any.5th - ttc, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,sub.ratio := log.repdose.any.5th - log.repdose.90d.5th, by=dsstox_substance_id]
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+write.xlsx(asnm.tier1.all.invivo, file='./output/asnm_tier1_all_invivo.xlsx')
+
+
+```
+
+```{r, warning=FALSE}
+
+
+kable(asnm.tier1.all.invivo[, c('log.repdose.any.5th',
+                                    'med.aed50',
+                                    'ttc',
+                                    'log.repdose.90d.5th', 
+                                    'pod.ratio',
+                                    'ttc.ratio',
+                                    'sub.ratio')],
+           filter='top', 
+          options=list(pagelength=25, autoWidth=FALSE,  scrollX=TRUE, initComplete = JS(
+    "function(settings, json) {",
+    "$('body').css({'font-family': 'Calibri'});",
+    "}"
+  )))
+
+
+
+
+```
+
+```{r, warning=FALSE}
+asnm.tier1.all.invivo.long <- melt.data.table(asnm.tier1.all.invivo,
+                                         id.vars = c('dsstox_substance_id', 'chnm','log.repdose.any.5th',
+                                    'med.aed50',
+                                    'ttc',
+                                    'log.repdose.90d.5th'),
+                                         measure.vars = c( 
+                                    'pod.ratio',
+                                    'ttc.ratio',
+                                    'sub.ratio'),
+                 variable.name = c('ratio.type'),
+                 value.name = c('ratio'))
+
+```
+
+```{r, warning=FALSE}
+
+pod.ratios <- ggplot(data=asnm.tier1.all.invivo.long, aes(x=ratio,fill=ratio.type))+
+  geom_histogram(position='identity',binwidth = 0.33, alpha=0.7)+
+  scale_x_continuous(breaks=seq(-5,10,1))+
+  scale_fill_viridis(name='Ratio Type', discrete=TRUE, labels=c('POD ratio','TTC ratio','SUB ratio'))+
+  #scale_color_viridis(discrete=TRUE)+
+  theme_bw()+
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14))+
+  xlab("POD ratios, log10-mg/kg/day")+
+  ylab("count")+
+  #coord_cartesian(xlim=c(0,6))+
+  geom_vline(xintercept=median(asnm.tier1.all.invivo$pod.ratio, na.rm=TRUE), col='red', linetype='dashed')+
+  geom_vline(xintercept=median(asnm.tier1.all.invivo$ttc.ratio, na.rm=TRUE), col='blue', linetype='dashed')
+
+pod.ratios
+
+```
+
+```{r, warning=FALSE}
+
+
+asnm.tier1.all.invivo[pod.ratio > 3, pod.ratio.size := as.character('med.aed50 too small')]
+asnm.tier1.all.invivo[pod.ratio < -3, pod.ratio.size := as.character('med.aed50 too big')]
+
+large.delta.pod.ratio <- asnm.tier1.all.invivo[pod.ratio.size %in% c('med.aed50 too small','med.aed50 too big'), c('chnm','dsstox_substance_id',
+                                                                                                                   'log.repdose.any.5th',
+                                    'med.aed50',
+                                    'pod.ratio')]
+
+
+setnames(large.delta.pod.ratio, c(1:5), c('chnm','DTXSID','5th%ile POD-trad','Med AED50','POD ratio'))
+large.delta.pod.ratio[, `5th%ile POD-trad` := round(`5th%ile POD-trad`, 2)]
+large.delta.pod.ratio[, `Med AED50` := round(`Med AED50`, 2)]
+large.delta.pod.ratio[, `POD ratio` := round(`POD ratio`, 2)]
+large.delta.pod.ratio <- large.delta.pod.ratio[order(`POD ratio`)]
+
+cols <- matrix(c("#000000"),nrow(large.delta.pod.ratio), ncol(large.delta.pod.ratio))
+tt <- ttheme_minimal(
+  core=list(fg_params = list(col = cols, cex=1.0),
+            bg_params = list(col=NA)),
+  rowhead=list(bg_params = list(col=NA), fg_params = list(fontface = "bold",
+                                                          cex=1.0)),
+  colhead=list(bg_params = list(col=NA), fg_params = list(cex=1.0)))
+t.podratio <- tableGrob(large.delta.pod.ratio, theme = tt)
+
+```
+
+```{r, warning=FALSE, fig.width=9, fig.height=10}
+plot_grid(pod.ratios, t.podratio, labels = c('A', 'B'), label_size = 18, nrow =2, rel_heights = c(1, 0.5))
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/Fig6_PODratios_comp_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=8, height=9, units='in', res=450)
+plot_grid(pod.ratios, t.podratio, labels = c('A', 'B'), label_size = 18, nrow =2, rel_heights = c(1, 0.5))
+dev.off()
+ 
+
+
+```
+
+# ECDF Plots of POD ratios {.tabset .tabset-fade .tabset-pills}
+
+The purpose of this section is to calculate ratios by assay technology or by technology type (targeted, broad, hipptox).
+Then we want to examine the use of these data in the POD ratio calculation via an empirical cumulative distribution plot(s).
+32 chemicals do not have any repeat dose POD (164 have it).
+
+```{r load-ratio-data, warning=FALSE}
+
+#asnm.tier1.all.invivo <- as.data.table(read.xlsx('./output/asnm_tier1_all_invivo.xlsx', colNames = TRUE,na.strings='NA'))
+colnames(asnm.tier1.all.invivo)
+#asnm.tier1.all.ratios <- asnm.tier1.all.invivo[,c(1,29:46, 59:61, 64, 67:68)] # need to reduce the col number of the data.table
+asnm.tier1.all.invivo[is.na(log.repdose.any.5th)] # 32 rows
+asnm.tier1.all.invivo[,pod.ratio25 := log.repdose.any.25th - med.aed50, by=dsstox_substance_id]
+asnm.tier1.all.ratios <- as.data.table(asnm.tier1.all.invivo)
+
+```
+
+Calculate ratios by specific assay technology, in the form log10(podtraditional - podnam). All of these values are already in log10 units.
+
+```{r calc-pod-ratio-assay, warning=FALSE}
+
+## targeted technologies to 5th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.atg=log.repdose.any.5th - aed50.atg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.biomap=log.repdose.any.5th - aed50.bsk,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.mea=log.repdose.any.5th - aed50.ccte,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.nvs=log.repdose.any.5th - aed50.nvs,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.stm=log.repdose.any.5th - aed50.stm,na.rm=TRUE) %>% data.table()
+
+## targeted technologies to 25th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.atg=log.repdose.any.25th - aed50.atg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.biomap=log.repdose.any.25th - aed50.bsk,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.mea=log.repdose.any.25th - aed50.ccte,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.nvs=log.repdose.any.25th - aed50.nvs,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.stm=log.repdose.any.25th - aed50.stm,na.rm=TRUE) %>% data.table()
+
+## broad technologies to 5th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.httr.mcf7=log.repdose.any.5th - aed50.httr.mcf7,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.httr.u2os=log.repdose.any.5th - aed50.httr.u2os,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.httr.heparg=log.repdose.any.5th - aed50.httr.heparg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.htpp.u2os=log.repdose.any.5th - aed50.htpp.u2os,na.rm=TRUE) %>% data.table()
+
+## broad technologies to 25th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.httr.mcf7=log.repdose.any.25th - aed50.httr.mcf7,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.httr.u2os=log.repdose.any.25th - aed50.httr.u2os,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.httr.heparg=log.repdose.any.25th - aed50.httr.heparg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.htpp.u2os=log.repdose.any.25th - aed50.htpp.u2os,na.rm=TRUE) %>% data.table()
+
+
+## astar hipptox to 5th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.hipptox.beas2b=log.repdose.any.5th - aed50.astar.beas2b,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.hipptox.hepg2=log.repdose.any.5th - aed50.astar.hepg2,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.hipptox.hk2=log.repdose.any.5th - aed50.astar.hek293,na.rm=TRUE) %>% data.table()
+
+## astar hipptox to 25th %ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.hipptox.beas2b=log.repdose.any.25th - aed50.astar.beas2b,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.hipptox.hepg2=log.repdose.any.25th - aed50.astar.hepg2,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.hipptox.hk2=log.repdose.any.25th - aed50.astar.hek293,na.rm=TRUE) %>% data.table()
+
+
+## make ratios table
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios[,c('dsstox_substance_id',
+                                                  'CASRN',
+                                                  'preferred_name',
+                                                  'apcra.pro.only',
+                                                  'med.aed50',
+                                                  'min.aed50',
+                                                  'log.repdose.any.5th',
+                                                  'log.repdose.any.25th',
+                                                  'pod.ratio',
+                                                  'pod.ratio25',
+                                                  'ratio5.atg',
+                                                  'ratio5.biomap',
+                                                  'ratio5.mea',
+                                                  'ratio5.nvs',
+                                                  'ratio5.stm',
+                                                  'ratio5.httr.mcf7',
+                                                  'ratio5.httr.u2os',
+                                                  'ratio5.httr.heparg',
+                                                  'ratio5.htpp.u2os',
+                                                  'ratio5.hipptox.beas2b',
+                                                  'ratio5.hipptox.hepg2',
+                                                  'ratio5.hipptox.hk2',
+                                                  'ratio25.atg',
+                                                  'ratio25.biomap',
+                                                  'ratio25.mea',
+                                                  'ratio25.nvs',
+                                                  'ratio25.stm',
+                                                  'ratio25.httr.mcf7',
+                                                  'ratio25.httr.u2os',
+                                                  'ratio25.httr.heparg',
+                                                  'ratio25.htpp.u2os',
+                                                  'ratio25.hipptox.beas2b',
+                                                  'ratio25.hipptox.hepg2',
+                                                  'ratio25.hipptox.hk2')]
+
+setnames(asnm.tier1.all.ratios, c('pod.ratio'), c('pod.ratio5'))
+```
+
+Add calculation of ratios by median assay type (broad, targeted, hipptox, broad+targeted).
+
+```{r calc-pod-ratios-type, warning=FALSE}
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.target=median(c(ratio5.atg,
+                                                                                                  ratio5.biomap,
+                                                                                                  ratio5.mea,
+                                                                                                  ratio5.nvs,
+                                                                                                  ratio5.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.coretarget=median(c(ratio5.atg,
+                                                                                                  ratio5.biomap,
+                                                                                                  ratio5.nvs), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.broad=median(c(ratio5.httr.mcf7,
+                                                                                                  ratio5.httr.u2os,
+                                                                                                  ratio5.httr.heparg,
+                                                                                                  ratio5.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.hipptox=median(c(ratio5.hipptox.beas2b, ratio5.hipptox.hepg2,ratio5.hipptox.hk2),na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.brta=median(c(ratio5.atg,
+                                                                                                  ratio5.biomap,
+                                                                                                  ratio5.nvs,
+                                                                                                  ratio5.httr.mcf7,
+                                                                                                  ratio5.httr.u2os,
+                                                                                                  ratio5.httr.heparg,
+                                                                                                  ratio5.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+```
+
+```{r calc-pod-ratios25-type, warning=FALSE}
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.target=median(c(ratio25.atg,
+                                                                                                  ratio25.biomap,
+                                                                                                  ratio25.mea,
+                                                                                                  ratio25.nvs,
+                                                                                                  ratio25.stm),
+                                                                                                  na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.coretarget=median(c(ratio25.atg,
+                                                                                                  ratio25.biomap,
+                                                                                                  ratio25.nvs), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.broad=median(c(ratio25.httr.mcf7,
+                                                                                                  ratio25.httr.u2os,
+                                                                                                ratio25.httr.heparg,
+                                                                                                  ratio25.htpp.u2os),
+                                                                                                 na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.hipptox = median(c(ratio25.hipptox.beas2b, ratio25.hipptox.hepg2,ratio25.hipptox.hk2),na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.brta=median(c(ratio25.atg,
+                                                                                                  ratio25.biomap,
+                                                                                                  ratio25.nvs,
+                                                                                                  ratio25.httr.mcf7,
+                                                                                                  ratio25.httr.u2os,
+                                                                                                  ratio25.httr.heparg,
+                                                                                                  ratio25.htpp.u2os),na.rm=TRUE)) %>% data.table()
+colnames(asnm.tier1.all.ratios)
+```
+
+Need to melt the ratios into long format by ratio type.
+
+```{r melt-ratios-long, warning=FALSE}
+
+asnm.tier1.all.ratios.long <- melt.data.table(asnm.tier1.all.ratios,
+                                              id.vars = c('dsstox_substance_id',
+                                                          'CASRN',
+                                                          'preferred_name',
+                                                          'apcra.pro.only',
+                                                          'med.aed50',
+                                                          'min.aed50',
+                                                          'log.repdose.any.5th',
+                                                          'log.repdose.any.25th'
+                                                          ),
+                                              measure.vars = c('pod.ratio5',
+                                                  'ratio5.atg',
+                                                  'ratio5.biomap',
+                                                  'ratio5.mea',
+                                                  'ratio5.nvs',
+                                                  'ratio5.stm',
+                                                  'ratio5.httr.mcf7',
+                                                  'ratio5.httr.u2os',
+                                                  'ratio5.httr.heparg',
+                                                  'ratio5.htpp.u2os',
+                                                  'ratio5.hipptox.beas2b',
+                                                  'ratio5.hipptox.hepg2',
+                                                  'ratio5.hipptox.hk2',
+                                                  'ratio5.med.target',
+                                                  'ratio5.med.coretarget',
+                                                  'ratio5.med.broad',
+                                                  'ratio5.med.hipptox',
+                                                  'ratio5.med.brta',
+                                                  'pod.ratio25',
+                                                          'ratio25.atg',
+                                                  'ratio25.biomap',
+                                                  'ratio25.mea',
+                                                  'ratio25.nvs',
+                                                  'ratio25.stm',
+                                                  'ratio25.httr.mcf7',
+                                                  'ratio25.httr.u2os',
+                                                  'ratio25.httr.heparg',
+                                                  'ratio25.htpp.u2os',
+                                                  'ratio25.hipptox.beas2b',
+                                                  'ratio25.hipptox.hepg2',
+                                                  'ratio25.hipptox.hk2',
+                                                  'ratio25.med.target',
+                                                  'ratio25.med.coretarget',
+                                                  'ratio25.med.broad',
+                                                  'ratio25.med.hipptox',
+                                                  'ratio25.med.brta'
+                                                  
+                                                  ),
+                                              variable.name = c('Ratio'),
+                                              value.name = c('Ratio.value'))
+
+
+
+```
+
+
+Work on ECDF plot.
+
+```{r,warning=FALSE, fig.width=10, fig.height=6, eval=FALSE, echo=FALSE}
+
+fig.ratio.ecdf <- ggplot(asnm.tier1.all.ratios.long[Ratio.name %in% c('pod.ratio',
+                                                  'ratio.atg',
+                                                  'ratio.biomap',
+                                                  'ratio.mea',
+                                                  'ratio.nvs',
+                                                  'ratio.stm',
+                                                  'ratio.httr.mcf7',
+                                                  'ratio.httr.u2os',
+                                                  'ratio.httr.heparg',
+                                                  'ratio.htpp.u2os',
+                                                  'ratio.hipptox.beas2b',
+                                                  'ratio.hipptox.hepg2',
+                                                  'ratio.hipptox.hk2')], aes(Ratio, color=Type))+
+  stat_ecdf(geom='step', size=1.5)+
+  scale_y_continuous(trans = 'log10',
+                     breaks= c(0.01, 0.1,0.2,0.3,0.4,0.5,0.75, 1))+
+  ylab("Cumulative Frequency") +
+  xlab('log10 POD Ratio')+
+  theme_bw() +
+  theme(
+    axis.line = element_line(colour = "black"),
+    axis.text = element_text(size=10),
+    axis.title = element_text(size=12, face='bold'))+
+  theme(axis.text.y = element_text(family = "sans", face = "bold", size=12))+
+  theme(legend.position="right", legend.title=element_blank())+
+  scale_x_continuous(breaks=seq(-5,10,1)) +
+  coord_cartesian(xlim = c(-5, 10)) +
+  #scale_color_viridis(discrete=TRUE, name='Ratio Type')+
+  scale_colour_manual(breaks=c('pod.ratio', 'ratio.atg','ratio.biomap','ratio.mea','ratio.nvs','ratio.stm',
+                               'ratio.httr.mcf7','ratio.httr.u2os','ratio.httr.heparg','ratio.htpp.u2os','ratio.hipptox.beas2b', 'ratio.hipptox.hepg2','ratio.hipptox.hk2'),
+                      values=c("red", "#440154FF", "#3B528BFF", "#21908CFF", "#5DC863FF", "#FDE725FF",
+                                     "#B63679FF", "#E65164FF", "#FB8861FF", "#FEC287FF",
+                                    "grey", "blue","purple"),
+                      labels=c("MED POD Ratio", "POD-ATG Ratio", "POD-BioMAP Ratio", "POD-MEA Ratio", "POD-NVS Ratio", "POD-STM Ratio", "POD-HTTr MCF7 Ratio", "POD-HTTr U2-OS Ratio", "POD-HTTr HepaRG Ratio", "POD-HTPP U2-OS Ratio", 'POD-HIPPTox BEAS-2B Ratio', 'POD-HIPPTox HepG2 Ratio', 'POD-HIPPTox HK2 Ratio'))+
+  geom_vline(xintercept=-2, lty='dashed', color='red')+
+  geom_vline(xintercept=2, lty='dashed', color='red')+
+  geom_vline(xintercept=0, color='red')+
+  geom_hline(yintercept=0.90, lty='dashed', color='red')
+
+fig.ratio.ecdf
+
+```
+
+```{r, warning=FALSE, fig.width=10, fig.height=6}
+fig.ratio.ecdfa <- ggplot(asnm.tier1.all.ratios.long[Ratio %in% c('pod.ratio5',
+                                                  'ratio5.med.target',
+                                                  'ratio5.med.broad',
+                                                  'ratio5.med.hipptox',
+                                                  'ratio5.med.coretarget',
+                                                  'ratio5.med.brta')], aes(Ratio.value, color=Ratio))+
+  stat_ecdf(geom='step', size=1.5)+
+  #scale_y_continuous(trans = 'log10',
+  #                   breaks= c(0.01, 0.1,0.2,0.3,0.4,0.5,0.75,1))+
+  ylab("Cumulative Frequency") +
+  xlab('log10 POD Ratio, 5th%ile POD')+
+  theme_bw() +
+  theme(
+    axis.line = element_line(colour = "black"),
+    axis.text = element_text(size=10),
+    axis.title = element_text(size=12, face='bold'))+
+  theme(axis.text.y = element_text(family = "sans", face = "bold", size=12))+
+  theme(legend.position="right", legend.title=element_blank())+
+  scale_x_continuous(breaks=seq(-5,10,1)) +
+  coord_cartesian(xlim = c(-5, 10)) +
+  #scale_color_viridis(discrete=TRUE, name='Ratio Type')+
+  scale_colour_manual(breaks=c('pod.ratio5',
+                                                  'ratio5.med.target',
+                                                  'ratio5.med.broad',
+                                                  'ratio5.med.hipptox',
+                                                  'ratio5.med.coretarget',
+                                                  'ratio5.med.brta'
+                               ),
+                      values=c("red", "#440154FF", "#3B528BFF", "#21908CFF", "#5DC863FF", "#FDE725FF"),
+                      labels=c("MED POD Ratio", "POD-Med Targeted", "POD-Med Broad", "POD-Med HIPPTox", 'POD-Core Targeted','POD-Med Broad + Core Targeted'))+
+  geom_vline(xintercept=-2, lty='dashed', color='red')+
+  geom_vline(xintercept=2, lty='dashed', color='red')+
+  geom_vline(xintercept=0, color='red')+
+  geom_hline(yintercept=0.90, lty='dashed', color='red')
+
+fig.ratio.ecdfa
+
+```
+
+```{r, warning=FALSE, fig.width=10, fig.height=6}
+fig.ratio.ecdfb <- ggplot(asnm.tier1.all.ratios.long[Ratio %in% c('pod.ratio25',
+                                                  'ratio25.med.target',
+                                                  'ratio25.med.broad',
+                                                  'ratio25.med.hipptox',
+                                                  'ratio25.med.coretarget',
+                                                  'ratio25.med.brta')], aes(Ratio.value, color=Ratio))+
+  stat_ecdf(geom='step', size=1.5)+
+  #scale_y_continuous(trans = 'log10',
+  #                   breaks= c(0.01, 0.1,0.2,0.3,0.4,0.5,0.75,1))+
+  ylab("Cumulative Frequency") +
+  xlab('log10 POD Ratio, 25th %ile POD')+
+  theme_bw() +
+  theme(
+    axis.line = element_line(colour = "black"),
+    axis.text = element_text(size=10),
+    axis.title = element_text(size=12, face='bold'))+
+  theme(axis.text.y = element_text(family = "sans", face = "bold", size=12))+
+  theme(legend.position="right", legend.title=element_blank())+
+  scale_x_continuous(breaks=seq(-5,10,1)) +
+  coord_cartesian(xlim = c(-5, 10)) +
+  #scale_color_viridis(discrete=TRUE, name='Ratio Type')+
+  scale_colour_manual(breaks=c('pod.ratio25',
+                                                  'ratio25.med.target',
+                                                  'ratio25.med.broad',
+                                                  'ratio25.med.hipptox',
+                                                  'ratio25.med.coretarget',
+                                                  'ratio25.med.brta'
+                               ),
+                      values=c("red", "#440154FF", "#3B528BFF", "#21908CFF", "#5DC863FF", "#FDE725FF"),
+                      labels=c("MED POD Ratio", "POD-Med Targeted", "POD-Med Broad", "POD-Med HIPPTox", 'POD-Core Targeted','POD-Med Broad + Core Targeted'))+
+  geom_vline(xintercept=-2, lty='dashed', color='red')+
+  geom_vline(xintercept=2, lty='dashed', color='red')+
+  geom_vline(xintercept=0, color='red')+
+  geom_hline(yintercept=0.90, lty='dashed', color='red')
+
+fig.ratio.ecdfb
+
+```
+```{r, warning=FALSE, fig.width=9, fig.height=10}
+
+
+plot_grid(fig.ratio.ecdfa,
+          fig.ratio.ecdfb,
+          labels = c('A', 'B'), label_size = 18, nrow =2)
+
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/Fig_PODecdfs_comp_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=8, height=8, units='in', res=300)
+
+plot_grid(fig.ratio.ecdfa,
+          fig.ratio.ecdfb,
+          labels = c('A', 'B'), label_size = 18, ncol =1)
+dev.off()
+
+
+```
+## Make boxplots of the POD ratio distributions
+
+```{r, warning=FALSE}
+
+asnm.tier1.all.ratios.long[grep('ratio5',Ratio), Ratio.type := 'POD5p']
+asnm.tier1.all.ratios.long[grep('ratio25',Ratio), Ratio.type := 'POD25p']
+
+```
+
+```{r, warning=FALSE}
+subset.long <- asnm.tier1.all.ratios.long[Ratio %in% c('ratio5.med.hipptox',
+                                                       'ratio25.med.hipptox',
+                                                   'pod.ratio5',
+                                                   'pod.ratio25',
+                                                   'ratio5.med.broad',
+                                                   'ratio25.med.broad',
+                                                   'ratio5.med.brta',
+                                                   'ratio25.med.brta',
+                                                  'ratio5.med.target',
+                                                  'ratio25.med.target',
+                                                  'ratio5.med.coretarget',
+                                                  'ratio25.med.coretarget'
+                                                  )]
+subset.long$Ratio <- factor(subset.long$Ratio, levels=c('ratio5.med.hipptox',
+                                                       'ratio25.med.hipptox',
+                                                   'pod.ratio5',
+                                                   'pod.ratio25',
+                                                   'ratio5.med.broad',
+                                                   'ratio25.med.broad',
+                                                   'ratio5.med.brta',
+                                                   'ratio25.med.brta',
+                                                  'ratio5.med.target',
+                                                  'ratio25.med.target',
+                                                  'ratio5.med.coretarget',
+                                                  'ratio25.med.coretarget'
+                                                  ), ordered=TRUE)
+```
+
+```{r, warning=FALSE, fig.width=9, fig.height=9}
+  
+fig.box.pod.ratio <- ggplot(data=subset.long[Ratio %in% c('ratio5.med.hipptox',
+                                                       'ratio25.med.hipptox',
+                                                   'pod.ratio5',
+                                                   'pod.ratio25',
+                                                   'ratio5.med.broad',
+                                                   'ratio25.med.broad',
+                                                   'ratio5.med.brta',
+                                                   'ratio25.med.brta',
+                                                  'ratio5.med.target',
+                                                  'ratio25.med.target',
+                                                  'ratio5.med.coretarget',
+                                                  'ratio25.med.coretarget'
+                                                  )],
+           aes(y=Ratio.value, x=factor(Ratio), fill=Ratio.type))+
+      geom_boxplot(alpha=0.5,width = 0.33)+
+      geom_jitter(alpha=0.3, color='black')+
+      scale_y_continuous(breaks=seq(-6, 6, 1))+
+  scale_fill_manual(name='POD Type',
+                    values=c('#481567FF','#95D840FF'),
+                     labels=c('ToxVal 5th%ile', 'ToxVal 25th%ile'),
+                     breaks = c('POD5p','POD25p'))+
+  scale_x_discrete(labels=c('POD-Med HIPPTox', 'POD-Med HIPPTox',
+                            "MED POD Ratio", "MED POD Ratio",
+                            "POD-Med Broad", "POD-Med Broad",
+                            'POD-Med Broad + Core Targeted', 'POD-Med Broad + Core Targeted',
+                            "POD-Med Targeted", "POD-Med Targeted",
+                            'POD-Core Targeted', 'POD-Core Targeted'))+
+      xlab('POD Ratio Type') +
+      ylab('log10 POD Ratio Value')+
+      theme_bw() +
+      theme(
+        axis.line = element_line(colour = "black"),
+        axis.text = element_text(size=10),
+        axis.title = element_text(size=12, face='bold'))+
+      theme(axis.text.x = element_text(family = "sans", size=10, angle=90, hjust=1))+
+      theme(legend.position="right")+
+  geom_hline(yintercept = 0, lty='dashed', color='red', size=2)
+
+fig.box.pod.ratio
+  
+```
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/Fig_PODratiobox_comp_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=8, height=6, units='in', res=300)
+fig.box.pod.ratio
+dev.off()
+
+
+```
+
+
+# Reproducibility
+
+```{r print-session-info, warning=FALSE}
+
+print(sessionInfo())
+
+```
+
+
+
+
+
+
+

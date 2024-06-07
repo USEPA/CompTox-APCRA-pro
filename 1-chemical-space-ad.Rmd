@@ -1,0 +1,757 @@
+---
+title: "1 Chemical Space and AD"
+author: "Katie Paul Friedman"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    collapsed: yes
+    df_print: paged
+    lightbox: no
+    number_sections: yes
+    self_contained: yes
+    thumbnails: no
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE}
+library(caret)
+library(circlize)
+library(ComplexHeatmap)
+library(cowplot)
+library(data.table)
+library(DescTools)
+library(dplyr)
+library(DT)
+library(ggbreak)
+library(ggplot2)
+library(ggrepel)
+library(ggstance)
+library(gplots)
+library(grid)
+library(httk)
+library(kableExtra)
+library(jtools)
+library(openxlsx)
+library(plotly)
+library(randomForest)
+library(RMySQL)
+library(stringr)
+library(tidyr)
+library(tcpl)
+library(textshape)
+library(umap)
+library(viridis)
+
+```
+
+# Load Data {.tabset .tabset-fade .tabset-pills}
+
+```{r load-files, warning=FALSE}
+apcra.pro <- fread('./source/chem/apcra_pro.csv') # APCRA chemicals
+apcra.pro[,c(1) := NULL]
+setnames(apcra.pro, c('V2','V3','V4'), c('DTXSID','CASRN','preferred_name'))
+apcra.pro <- apcra.pro[-c(1),]
+apcra.pro[,list := 'Pro']
+
+
+apcra.ret <- read.xlsx('./source/chem/Supp_File_2_pod_ratio_master_final.xlsx',sheet=1, colNames = TRUE) %>% as.data.table() # APCRA retrospective case study chemicals from Paul Friedman et al 2020
+apcra.ret[,list := 'Ret']
+
+apcra.list <- read.xlsx('./source/apcra_list.xlsx', sheet=1, colNames = TRUE) %>% as.data.table()
+
+test.opera.pred <- fread('./source/chem/test_opera_pred_ccd_13apr2023.csv') # TEST and OPERA predictions
+aqc <- fread('./source/chem/Tox21-ToxCast-AnalyticalQC-01042023.csv')
+#aqc <- read.xlsx('./source/chem/analqc_invitrodb_filtered_spids_29JUN2023.xlsx', sheet='condensed_output', colNames = TRUE) %>% as.data.table() # analytical quality control
+
+func.use <- read.xlsx('./source/use/functional_use_database.xlsx', sheet = 'SI Table 1', colNames=TRUE) %>% as.data.table() # Functional use data downloaded from ChemExpoDB
+
+bulk.func.use <- fread('./source/use/ChemExpo_bulk_functional_uses_20230608.csv')
+```
+
+# Evaluate use differences {.tabset .tabset-fade .tabset-pills}
+
+```{r, warning=FALSE}
+
+apcra.total <- merge.data.table(apcra.pro,
+                                apcra.ret[,c('DTXSID','CASRN','Name','list')],
+                                by='DTXSID',
+                                all.x=TRUE,
+                                all.y=TRUE)
+
+apcra.total[is.na(preferred_name), preferred_name := Name]
+apcra.total[is.na(CASRN.y), CASRN.y := CASRN.x]
+apcra.total[,c('Name','CASRN.x') := NULL]
+setnames(apcra.total,c('CASRN.y'), c('casrn'))
+apcra.total[is.na(list.y), list.y := list.x]
+apcra.total[list.x=='Pro' & list.y=='Ret', list.y := 'Both']
+
+apcra.total[,c('list.x') := NULL]
+setnames(apcra.total, c('list.y'), c('list'))
+
+apcra.total
+
+```
+
+## Functional Use
+
+```{r, warning=FALSE}
+
+func.use.apcra <- apcra.total %>% left_join(func.use, by=c('casrn')) %>% as.data.table()
+
+head(func.use.apcra)
+```
+
+```{r, warning=FALSE}
+
+nrow(func.use.apcra[is.na(harmonized_function)]) #344
+
+```
+## Bulk Functional Use
+
+* Harmonized function list seems to have better coverage
+* However still 154 chemicals where there is no annotated harmonized function
+
+```{r, warning=FALSE}
+
+bulk.use.apcra <- apcra.total %>% left_join(bulk.func.use, by=join_by(casrn == `Curated CAS`)) %>% as.data.table()
+head(bulk.use.apcra)
+
+```
+```{r, warning=FALSE}
+
+bulk.use.apcra[is.na(`Harmonized Functional Use`)]
+
+```
+```{r, warning=FALSE}
+bulk.use.apcra[is.na(`Harmonized Functional Use`), `Harmonized Functional Use` := as.character("Not annotated")]
+
+bulk.use.apcra.wide <- dcast.data.table(bulk.use.apcra,
+                                        DTXSID.x + preferred_name + casrn + list ~ `Harmonized Functional Use`,
+                                        value.var = c("Harmonized Functional Use"),
+                                        fun.aggregate = length)
+
+bulk.use.apcra.wide[,c('V1') := NULL]  # think these were blanks?
+
+# upon inspection there are chemicals with multiple counts of functional use
+```
+
+```{r, warning=FALSE}
+
+# make the harmonized functional use binary instead of multiple counts
+
+for(j in 5:ncol(bulk.use.apcra.wide)){
+   set(bulk.use.apcra.wide, i= which(bulk.use.apcra.wide[[j]]!=0), j=j, value =1)
+}
+
+```
+
+```{r, eval=FALSE, warning=FALSE}
+write.csv(bulk.use.apcra.wide, file='./source/use/harmonized_funct_use_for_annotation.csv')
+```
+
+* Using list memberships and published uses, I attempted to manually assign functional uses for as many of the 154 DTXSID with no harmonized functional use as possible.
+* For chemicals that function as intermediates or in industrial processes, no assignment was typically annotated.
+* A preponderance of the manual curations were biocides, pharmaceuticals, steroids (created category), research probes (created category).
+
+```{r, warning=FALSE}
+bulk.use.apcra.wide2 <- fread('./source/use/harmonized_funct_use_annotated.csv')
+bulk.use.apcra.wide2[,c('V1') := NULL]
+```
+
+```{r, warning=FALSE}
+bulk.use.apcra.wide2 <- bulk.use.apcra.wide2 %>% 
+    mutate_at(c(5,6), ~replace_na(.,0)) %>% as.data.table()
+
+bulk.use.apcra.wide2[, chem_use_sum := rowSums(.SD), .SDcols=5:66]
+
+
+funct.use.summ <- colSums(bulk.use.apcra.wide2[list %in% c('Ret'),5:66]) %>% as.data.frame()
+funct.use.summ$harm_funct_use <- rownames(funct.use.summ)
+funct.use.summ <- as.data.table(funct.use.summ)
+setnames(funct.use.summ, '.', 'count')
+funct.use.summ$Pro_harm_funct_use <- colSums(bulk.use.apcra.wide2[list %in% c('Pro'),5:66])
+funct.use.summ$both_harm_funct_use <- colSums(bulk.use.apcra.wide2[list %in% c('Both'),5:66])
+```
+
+```{r, warning=FALSE}
+setnames(funct.use.summ, c('count','Pro_harm_funct_use', 'both_harm_funct_use'), c('retro','pro','both'))
+setcolorder(funct.use.summ, c(2,1,4,3))
+setorder(funct.use.summ, cols = -'retro',-'pro',-'both')
+funct.use.summ
+order <- as.factor(funct.use.summ$harm_funct_use)
+```
+
+```{r, warning=FALSE}
+
+colSums(funct.use.summ[,c(2,3,4)])
+
+```
+
+```{r, warning=FALSE}
+# put data back into long format
+
+funct.use.summ.long <- melt.data.table(funct.use.summ,
+                                       id.vars = c('harm_funct_use'),
+                                       measure.vars = c('retro', 'both','pro'),
+                                       variable.name = 'project',
+                                       value.name = 'count')
+
+head(funct.use.summ.long)
+
+```
+
+## Figure ChemExpoDB Functional Use
+
+```{r, warning=FALSE, message=FALSE}
+
+fig_use <- ggplot(funct.use.summ.long)+
+  geom_bar(aes(x=factor(harm_funct_use, levels=order), y=count, fill=project), stat='identity')+
+  scale_fill_viridis(option="plasma",discrete=TRUE)+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle=90,size=6,hjust=0.8),
+        axis.text.y = element_text(size=8),
+        axis.title = element_text(size=10))+
+  xlab('Harmonized Functional Use or Annotated Use')+
+  #coord_flip()+
+  ggbreak::scale_y_break(c(100,275))
+
+```
+
+```{r, fig.height=12, fig.width=10, error=FALSE, message=FALSE, warning=FALSE, results='hide',fig.keep='all'}
+
+fig_use
+
+```
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/Fig_chem_funct_use_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=17.35, height=15, units='cm', res=300)
+fig_use
+dev.off()
+
+```
+# Exposure pathway diversity {.tabset .tabset-fade .tabset-pills}
+
+* Trying a simpler view of use by using exposure pathway.
+* Use SEEM3 exposure pathways.
+
+## Load Data
+
+```{r load-seem3, warning=FALSE}
+seem3 <- fread('./source/exposure/SupTable-all.chem.preds-2018-11-28.txt')
+```
+
+```{r merge-seem3, warning=FALSE}
+apcra.total.seem3 <- merge.data.table(apcra.total,
+                                     seem3[,c('dsstox_substance_id',
+                                              'seem3',
+                                              'seem3.l95',
+                                              'seem3.u95',
+                                              'Pathway')],
+                                     by.x='DTXSID',
+                                     by.y='dsstox_substance_id',
+                                     all.x=TRUE)
+
+apcra.total.seem3
+rm('seem3')
+```
+
+```{r exposure-pathway-reps, warning=FALSE}
+table(apcra.total.seem3$Pathway)
+
+```
+
+## Clean Data
+
+```{r expos-pathway-cleanup, warning=FALSE}
+
+apcra.total.seem3 <- apcra.total.seem3 %>%
+  mutate(Pathway = str_replace_all(Pathway, 'Consumer', 'Cons.')) %>%
+  mutate(Pathway = str_replace_all(Pathway, ' Cons.', 'Cons.'))
+
+apcra.total.seem3 <- apcra.total.seem3 %>%
+  mutate(Pathway = str_replace_all(Pathway, 'Dietary', 'Diet.')) %>%
+  mutate(Pathway = str_replace_all(Pathway, ' Diet.', 'Diet.'))
+
+apcra.total.seem3 <- apcra.total.seem3 %>%
+  mutate(Pathway = str_replace_all(Pathway, 'Pesticide', 'Pest.')) %>%
+  mutate(Pathway = str_replace_all(Pathway, ' Pest.', 'Pest.'))
+
+apcra.total.seem3 <- apcra.total.seem3 %>%
+  mutate(Pathway = str_replace_all(Pathway, 'Industrial', 'Ind.')) %>%
+  mutate(Pathway = str_replace_all(Pathway, ' Ind.', 'Ind.'))
+
+apcra.total.seem3 <- apcra.total.seem3 %>%
+  mutate(Pathway) %>%
+  separate_rows(Pathway, sep = "\\,") %>%
+  pivot_wider(names_from = Pathway, 
+              values_from = Pathway,
+              values_fill=0,
+              values_fn = function(x) 1) %>%
+  as.data.table()
+
+head(apcra.total.seem3)
+```
+```{r more-data-cleaning, warning=FALSE}
+
+
+pro_path <- colSums(apcra.total.seem3[list %in% c('Pro'),c('Diet.',
+                                               'Cons.',
+                                               'Pest.',
+                                               'Ind.',
+                                               'Unknown',
+                                               'NA',
+                                               'All Four')])
+
+both_path <- colSums(apcra.total.seem3[list %in% c('Both'),c('Diet.',
+                                               'Cons.',
+                                               'Pest.',
+                                               'Ind.',
+                                               'Unknown',
+                                               'NA',
+                                               'All Four')])
+
+ret_path <- colSums(apcra.total.seem3[list %in% c('Ret'),c('Diet.',
+                                               'Cons.',
+                                               'Pest.',
+                                               'Ind.',
+                                               'Unknown',
+                                               'NA',
+                                               'All Four')])
+
+apcra_path <- as.data.frame(pro_path)
+apcra_path <- cbind(apcra_path, both_path, ret_path)
+apcra_path$pathway <- rownames(apcra_path)
+apcra_path <- as.data.table(apcra_path)
+setnames(apcra_path, c('pro_path','both_path','ret_path'), c('pro','both','ret'))
+setcolorder(apcra_path, c(4,1:3))
+
+apcra_path <- apcra_path[order(-ret)]
+order <- as.factor(apcra_path$pathway)
+
+apcra_path_long <- melt.data.table(apcra_path,
+                                   id.vars = 'pathway',
+                                   measure.vars = c('ret','both','pro'),
+                                   variable.name = 'project')
+
+```
+
+## Figure SEEM3 Exposure Pathways
+
+```{r, warning=FALSE}
+
+fig_use_seem <- ggplot(apcra_path_long)+
+  geom_bar(aes(x=factor(pathway, levels=order), y=value, fill=project), stat='identity')+
+  #scale_fill_viridis(option="plasma",discrete=TRUE)+
+  scale_fill_manual(values=c('#B12A90FF','#FCA636FF','#0D0887FF'),
+                    breaks=c('both','pro','ret'))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle=45,size=12,hjust=0.8),
+        axis.text.y = element_text(size=12),
+        axis.title = element_text(size=12))+
+  xlab('Exposure Pathway Prediction')+ 
+  ylab('Count by Project')+
+  coord_flip()
+
+fig_use_seem
+
+```
+
+# Chemical space {.tabset .tabset-fade .tabset-pills}
+
+## Analytical QC
+
+* How many substances "pass" AQC?
+
+```{r, warning=FALSE}
+
+apcra.list.aqc <- merge.data.table(apcra.list,
+                                   aqc[, c('DTXSID','T0','T4','Call')],
+                                   all.x = TRUE,
+                                   by=c('DTXSID')
+                                   )
+
+apcra.list.aqc[,aqc_iv_pass := as.character('not stable/not present')]
+apcra.list.aqc[T0 %in% c('A','B','C'),aqc_iv_pass := 'present at T0' ]
+apcra.list.aqc[T0 %in% c('A','B','C') & Call %in% c('S','L'), aqc_iv_pass := 'stable/present']
+apcra.list.aqc[is.na(T0) & is.na(T4) & is.na(Call), aqc_iv_pass := 'no data']
+apcra.list.aqc[T0 %in% c('I') & T4 %in% c('I') & Call %in% c('S'), aqc_iv_pass := 'stable isomer'] 
+apcra.list.aqc[DTXSID=='DTXSID1027891', aqc_iv_pass := 'stable Markush']
+
+
+nrow(apcra.list.aqc[aqc_iv_pass %in% c('present at T0','stable/present', 'stable isomer','stable Markush','no data')]) #172
+apcra.list.aqc[,aqc_indicator := 0]
+apcra.list.aqc[aqc_iv_pass %in% c('present at T0','stable/present','stable isomer','stable Markush', 'no data'), aqc_indicator := 1]
+
+```
+* Manual inspections bring the number to 173
+```{r, warning=FALSE}
+# manual corrections
+apcra.list.aqc[DTXSID=='DTXSID0044818', aqc_iv_pass := 'present T4/stable']
+apcra.list.aqc[DTXSID=='DTXSID0044818', aqc_indicator := 1]
+apcra.list.aqc[DTXSID=='DTXSID6024838', aqc_iv_pass := 'present T4/stable']
+apcra.list.aqc[DTXSID=='DTXSID6024838', aqc_indicator := 1]
+apcra.list.aqc[DTXSID=='DTXSID7027837', aqc_iv_pass := 'present T4/stable']
+apcra.list.aqc[DTXSID=='DTXSID7027837', aqc_indicator := 1]
+apcra.list.aqc[DTXSID=='DTXSID8044836', aqc_iv_pass := 'no data']
+apcra.list.aqc[DTXSID=='DTXSID8044836', aqc_indicator := 1]
+apcra.list.aqc[DTXSID=='DTXSID7025219', aqc_iv_pass := 'stable isomer'] # should be I-I-S in revised call
+apcra.list.aqc[DTXSID=='DTXSID7025219', aqc_indicator := 1]
+
+```
+
+## Properties
+
+```{r, warning=FALSE}
+col.num <- c('AVERAGE_MASS','OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED', 'VAPOR_PRESSURE_MMHG_OPERA_PRED')
+test.opera.pred[, (col.num) := lapply (.SD, as.numeric), .SDcols = col.num ]
+
+# OPERA in CCD Batch Search leaves some chemicals out
+# Manual corrections made here
+
+test.opera.pred[DTXSID=='DTXSID0021256', OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED := 2.43]
+test.opera.pred[DTXSID=='DTXSID0021256', VAPOR_PRESSURE_MMHG_OPERA_PRED := 7.41e-10]
+
+test.opera.pred[DTXSID=='DTXSID2041200', OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED := 3.07]
+test.opera.pred[DTXSID=='DTXSID2041200', VAPOR_PRESSURE_MMHG_OPERA_PRED := 1.10e-9]
+
+# take a representative structure for the Markush structure - is this the best one?
+test.opera.pred[DTXSID=='DTXSID1027891', OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED := 0.600] # use DTXSID8058669 as representative
+test.opera.pred[DTXSID=='DTXSID1027891', VAPOR_PRESSURE_MMHG_OPERA_PRED := 2.14e-7] # use DTXSID8058669 as representative
+test.opera.pred[DTXSID=='DTXSID1027891', AVERAGE_MASS := 691.05] # use DTXSID8058669 as representative
+
+# take a representative structure for the Markush structure
+test.opera.pred[DTXSID=='DTXSID7025219', OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED := 2.07] # use DTXSID0041644 as representative
+test.opera.pred[DTXSID=='DTXSID7025219', VAPOR_PRESSURE_MMHG_OPERA_PRED := 7.94e-7] # use DTXSID0041644 as representative
+test.opera.pred[DTXSID=='DTXSID7025219', AVERAGE_MASS := 348.48] # use DTXSID0041644 as representative
+
+test.opera.pred[,log10VP := log10(as.numeric(VAPOR_PRESSURE_MMHG_OPERA_PRED))]
+
+```
+
+```{r, warning=FALSE}
+
+# define screenable domain = 1 for logP
+test.opera.pred[, logP.indicator := 0]
+test.opera.pred[OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED < 5.6, logP.indicator := 1]
+test.opera.pred[OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED < -0.4, logP.indicator := 0]
+test.opera.pred[is.na(OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED), logP.indicator := 2] # out of domain
+
+# define screenable domain = 1 for MW
+test.opera.pred[, mw.indicator := 0]
+test.opera.pred[AVERAGE_MASS < 500, mw.indicator := 1]
+test.opera.pred[AVERAGE_MASS < 100, mw.indicator := 0]
+test.opera.pred[is.na(AVERAGE_MASS), mw.indicator := 2] # ill defined/mixtures
+
+# define screenable domain = 1 for vapor pressure
+test.opera.pred[, logVP.indicator := 0]
+test.opera.pred[log10VP < 2, logVP.indicator := 1]
+test.opera.pred[is.na(log10VP), logVP.indicator :=2] # out of domain
+
+```
+
+## Create visualization for chemical AD
+* What is the chemical screening applicability domain?
+
+```{r, warning=FALSE}
+
+ad.tbl <- merge.data.table(apcra.list.aqc[, c('DTXSID',
+                                              'CASRN',
+                                              'preferred_name',
+                                              'apcra.pro.only',
+                                              'T0',
+                                              'T4',
+                                              'Call',
+                                              'aqc_iv_pass',
+                                              'aqc_indicator')],
+                           test.opera.pred[, c('DTXSID',
+                                               'AVERAGE_MASS',
+                                               'log10VP',
+                                               'OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED',
+                                               'logP.indicator',
+                                               'mw.indicator',
+                                               'logVP.indicator')],
+                           by=c('DTXSID'))
+
+# define applicability domain for halflife < 90 days
+ad.tbl[,half.life := 1]
+```
+
+```{r, warning=FALSE}
+load_sipes2017()
+load_pradeep2020()
+load_dawson2021()
+
+ad.tbl$CASRN <- test.opera.pred$CASRN[match(ad.tbl$DTXSID,test.opera.pred$DTXSID)]
+
+ad.tbl.df <- as.data.frame(subset(ad.tbl, CASRN %in% get_cheminfo(species=c('Human'))))
+```
+
+```{r, warning=FALSE}
+
+for (this.chem in ad.tbl.df$DTXSID)
+{
+  skip_to_next <- FALSE
+  tryCatch(
+  out <- calc_css(dtxsid = this.chem,
+         species= 'Human',
+            output.units = 'uM',
+            daily.dose=1,
+            doses.per.day=1,
+            tissue = 'plasma',
+            model = 'pbtk',
+         f=0.001,
+         adjusted.Funbound.plasma = TRUE,
+            restrictive.clearance = TRUE,
+            well.stirred.correction =TRUE),
+  error = function(e) {skip_to_next <<-TRUE})
+  if(skip_to_next){next}
+  index <- ad.tbl.df$DTXSID==this.chem
+  ad.tbl.df[index, "Human.day.Css.pbtk"] <- out["the.day"] 
+}
+
+
+```
+
+
+```{r, warning=FALSE}
+ad.tbl.df <- as.data.table(ad.tbl.df)
+half.life.long <- ad.tbl.df[Human.day.Css.pbtk>90]$DTXSID
+ad.tbl[DTXSID %in% half.life.long, half.life :=0]
+
+```
+
+```{r, warning=FALSE}
+ad.tbl.plot <- as.data.table(ad.tbl)
+
+setnames(ad.tbl.plot, c('apcra.pro.only','aqc_indicator','half.life','mw.indicator','logP.indicator','logVP.indicator'), 
+         c('Prosp','AQC','T1/2', 'MW', 'LogP','LogVP'))
+
+```
+
+
+```{r, warning=FALSE}
+
+chems.include <- ad.tbl.plot[AQC==0]
+ad.tbl.plot <- ad.tbl.plot[order(-Prosp,-AQC)]
+```
+
+```{r, warning=FALSE}
+# make matrix for heatmap
+mat <- ad.tbl.plot[DTXSID %in% chems.include$DTXSID,c('preferred_name','Prosp','AQC','T1/2', 'MW', 'LogP','LogVP' 
+                         )]
+
+mat$preferred_name <- str_trunc(mat$preferred_name, 50)
+#mat2 <- mat[,lapply(.SD, function(x){ifelse(is.na(x),6,x)}), .SDcol=c(4:15)]
+
+matrix <- as.matrix(mat[,c(2:7)])
+rownames(matrix) <- mat[,preferred_name]
+```
+
+
+```{r, warning=FALSE, fig.height=8, fig.width=8}
+
+ 
+  
+
+heatmap_fig <- Heatmap(matrix = matrix, 
+                       cluster_columns = FALSE,
+                       cluster_rows=TRUE,
+                       #name="Chem Properties",
+                       #col=col_fun,
+                       col = c("gray","black","white"),
+                       show_row_names = TRUE, 
+                       #row_dend_width = unit(3, "cm"),
+                       column_names_max_height = unit(8, "cm"),
+                       column_names_gp = gpar(fontsize = 10),
+                       row_names_gp = gpar(fontsize = 10),
+                       #clustering_method_columns = "ward.D",
+                       clustering_method_rows = "ward.D",
+                       #clustering_distance_rows = "euclidean",
+                       #clustering_distance_columns = "euclidean",
+                       show_row_dend = FALSE,
+                       show_column_dend = FALSE,
+                       heatmap_legend_param = list(at=c(0,1,2),
+                                                   labels=c('Out','In','No data'),
+                                                   title = "",legend_direction = 'horizontal'),
+                       width=unit(6,'cm'),
+                       height = unit(14, 'cm'),
+                       rect_gp = gpar(col = "white", lwd = 1),
+                       column_names_side='top'
+                       #left_annotation = row_ha2
+                       )
+
+hm.chem <- draw(heatmap_fig,  heatmap_legend_side='bottom')
+
+```
+
+# Physicochemical property diversity
+
+```{r, warning=FALSE}
+#write.xlsx(apcra.total,'./source/chem/apcra_total.xlsx')
+
+test.opera.pred.total <- read.xlsx('./source/chem/apcra_total.xlsx', sheet=2, colNames = TRUE) %>% as.data.table()
+
+test.opera.pred.total$list <- apcra.total$list[match(test.opera.pred.total$DTXSID,
+                                                     apcra.total$DTXSID)]
+
+test.opera.pred.total[DTXSID=='DTXSID0021256', OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED := 2.43]
+test.opera.pred.total[DTXSID=='DTXSID0021256', VAPOR_PRESSURE_MMHG_OPERA_PRED := 7.41e-10]
+
+test.opera.pred.total[DTXSID=='DTXSID2041200', OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED := 3.07]
+test.opera.pred.total[DTXSID=='DTXSID2041200', VAPOR_PRESSURE_MMHG_OPERA_PRED := 1.10e-9]
+```
+
+```{r, warning=FALSE}
+pchem <- test.opera.pred.total[,c('AVERAGE_MASS',
+                                  #"BIOCONCENTRATION_FACTOR_OPERA_PRED",                     
+                                  #"BIODEGRADATION_HALF_LIFE_DAYS_DAYS_OPERA_PRED",                  
+                                  #"BOILING_POINT_DEGC_OPERA_PRED",                                
+                                  #"HENRYS_LAW_ATM-M3/MOLE_OPERA_PRED",                              
+                                  #"OPERA_KM_DAYS_OPERA_PRED",                                       
+                                  #"OCTANOL_AIR_PARTITION_COEFF_LOGKOA_OPERA_PRED",                  
+                                  #"SOIL_ADSORPTION_COEFFICIENT_KOC_L/KG_OPERA_PRED",                
+                                  "OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED",                         
+                                 # "MELTING_POINT_DEGC_OPERA_PRED",                                
+                                 # "OPERA_PKAA_OPERA_PRED",                                           
+                                 # "OPERA_PKAB_OPERA_PRED",                                           
+                                  "VAPOR_PRESSURE_MMHG_OPERA_PRED",                                  
+                                  "WATER_SOLUBILITY_MOL/L_OPERA_PRED"   
+                                  )] %>%
+  drop_na() %>%
+  mutate(ID=row_number())
+
+pchem_meta <- test.opera.pred.total %>%
+  mutate(ID=row_number()) %>%
+  select(ID, DTXSID, PREFERRED_NAME, list)
+
+pchem <- lapply(pchem,as.numeric) %>% as.data.frame()
+pchem <- na.omit(pchem)
+```
+
+```{r, warning=FALSE}
+
+set.seed(123456)
+umap_fit <- pchem %>%
+  select(where(is.numeric)) %>%
+  column_to_rownames("ID") %>%
+  scale() %>%
+  umap()
+```
+
+```{r, warning=FALSE}
+umap_df <- umap_fit$layout %>%
+  as.data.frame() %>%
+  rename(UMAP1="V1",
+         UMAP2="V2") %>%
+  mutate(ID=row_number()) %>%
+  inner_join(pchem_meta, by="ID")
+
+umap_df %>% head()
+
+```
+
+```{r, warning=FALSE}
+umap_df_2 <- merge.data.frame(umap_df,
+                              pchem,
+                              by='ID',
+                              all.x=TRUE) %>% as.data.table()
+dtxsids.label <- chems.include$DTXSID
+```
+
+
+
+```{r, warning=FALSE, fig.width=10, fig.height=8}
+
+umap.pchem <- umap_df_2 %>%
+  ggplot(aes(x=UMAP1,
+             y=UMAP2,
+             color=list,
+             shape=list,
+             label=PREFERRED_NAME
+             ))+
+  geom_point(alpha=0.3, size=4)+
+  scale_color_manual(name='project',
+                     values=c('#B12A90FF','#FCA636FF','#0D0887FF'),
+                     labels=c('both','pro','ret'))+
+  scale_shape_manual(name='project',
+                     labels=c('both','pro','ret'),
+                     values=c(15,16,17))+
+  theme(legend.position='none')+
+  labs(x="UMAP1",
+       y="UMAP2")+
+  theme_bw()+
+  theme(axis.text = element_text(size=14),
+        axis.title = element_text(size=16),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=14))+
+  geom_label_repel(data=subset(umap_df_2, DTXSID %in% dtxsids.label),
+                aes(x=UMAP1,y=UMAP2,label=PREFERRED_NAME), 
+            position=position_jitter(width = 1, height = 1),
+            fill= NA, box.padding = 1.5)
+umap.pchem
+```
+
+
+
+```{r, warning=FALSE, fig.height=15, fig.width=15}
+
+heatmap_pchem <- grid.grabExpr(draw(hm.chem))
+
+
+fig_chems_all <- ggdraw()+
+  draw_plot(heatmap_pchem, x=0,y=0.47,width=0.5, height=0.5)+
+  draw_plot(umap.pchem, x=0, y=0, width=0.9, height=0.45)+
+  draw_plot(fig_use_seem, x=0.5, y=0.5, width=0.5, height=0.5)+
+  draw_plot_label(label=c('A','B','C'), size=16, y=c(1, 1, 0.49), x=c(0.03,0.5, 0.05))
+
+fig_chems_all
+
+```
+
+
+```{r, warning=FALSE, eval=FALSE}
+
+file.dir <- paste('output/', sep='')
+file.name <- paste('/Fig_chem_pchem_funct_use_', Sys.Date(), '.tiff', sep='')
+file.path <- paste(file.dir, file.name, sep='')
+dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
+tiff(file.path, width=30, height=35, units='cm', res=450)
+fig_chems_all
+dev.off()
+
+```
+
+# Reproducibility
+
+```{r write-files, warning=FALSE, eval=FALSE}
+
+list_data <- list('apcra_ad' = as.data.frame.data.frame(ad.tbl),
+                  'apcra_total_list' = as.data.frame(apcra.total),
+                  'apcra_total_seem3' = as.data.frame(apcra.total.seem3),
+                  'apcra_test_opera_preds' = as.data.frame(test.opera.pred.total))
+write.xlsx(list_data,
+           './source/chems/apcra_chem_ad.xlsx')
+
+save(ad.tbl,
+     apcra.total,
+     apcra.total.seem3,
+     test.opera.pred.total,
+     file='./source/chem/apcra_chem_ad.RData')
+
+
+```
+
+
+```{r print-session-info, warning=FALSE}
+
+print(sessionInfo())
+
+```
