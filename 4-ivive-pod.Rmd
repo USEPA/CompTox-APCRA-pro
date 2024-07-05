@@ -1351,7 +1351,7 @@ print(rf_aedtriage30)
 
 ```
 
-### Compare the minimum AED50 to ToxVal POD
+## Compare the minimum AED50 to ToxVal POD
 * defining the minimum AED50 without CCTE-MEA does a little better on the whole
 
 ```{r, warning=FALSE}
@@ -1411,12 +1411,12 @@ aed.toxval30.rmse <- round(sqrt(mean(aed.toxval30$residuals^2)),3)
 aed.toxval30.r2 <- round(summary(aed.toxval30)$r.squared,3)
 ```
 
-### Median AED50 vs ToxVal PODs
+## Median AED50 vs ToxVal PODs
 
 Calculate the median AED50
 
 ```{r, warning=FALSE}
-# Calcualte median
+# Calculate median
 asnm.tier1.pred3[,med.aed50 := median(aed50.atg, 
 aed50.bsk, aed50.nvs, aed50.stm, aed50.httr.mcf7, 
 aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, aed50.astar.beas2b, 
@@ -1609,12 +1609,36 @@ asnm.tier1.pred3[, mlr.pred25 := predict(model.aedtriage25.asnm, .SD), .SDcols =
 
 Calculate the RMSE and R2 on the MLR models.
 
-```{r, warning=FALSE}
+```{r, warning=FALSE, echo=FALSE, eval=FALSE}
 model.aedtriage5.asnm.rmse <- round(sqrt(mean(model.aedtriage5.asnm$residuals^2)),3)
 model.aedtriage5.asnm.r2 <- round(summary(model.aedtriage5.asnm)$r.squared,3)
 
 model.aedtriage25.asnm.rmse <- round(sqrt(mean(model.aedtriage25.asnm$residuals^2)),3)
 model.aedtriage25.asnm.r2 <- round(summary(model.aedtriage25.asnm)$r.squared,3)
+
+```
+```{r, warning=FALSE}
+
+mlr.eval5 <- lm(p5.toxval.numeric ~ mlr.pred5, 
+            data= asnm.tier1.pred3)
+
+model.aedtriage5.asnm.rmse <- round(sqrt(mean(mlr.eval5$residuals^2)),3)
+model.aedtriage5.asnm.r2 <- round(summary(mlr.eval5)$r.squared,3)
+
+mlr.eval25 <- lm(p25.toxval.numeric ~ mlr.pred25, 
+            data= asnm.tier1.pred3)
+
+model.aedtriage25.asnm.rmse <- round(sqrt(mean(mlr.eval25$residuals^2)),3)
+model.aedtriage25.asnm.r2 <- round(summary(mlr.eval25)$r.squared,3)
+
+mlr.eval25.toxval5 <- lm(p5.toxval.numeric ~ mlr.pred25, 
+            data= asnm.tier1.pred3)
+
+model.aedtriage25.toxval5.rmse <- round(sqrt(mean(mlr.eval25.toxval5$residuals^2)),3)
+model.aedtriage25.toxval5.r2 <- round(summary(mlr.eval25.toxval5)$r.squared,3)
+
+
+
 ```
 
 Gutcheck: look at the distribution of values from the MLR models.
@@ -1764,8 +1788,9 @@ model.type <- c('min AED50',
                 'med AED50',
                 'med AED50',
                 'med AED50',
-                'mlr AED50',
-                'mlr AED50',
+                'mlr AED50 trained to ToxVal5',
+                'mlr AED50 trained to ToxVal25',
+                'mlr AED50 trained to ToxVal25',
                 'rf AED50',
                 'rf AED50')
 
@@ -1784,6 +1809,7 @@ pod.type <- c('ToxVal 5th%ile',
               'ToxVal 5th%ile',
               'ToxVal 25th%ile',
               'ToxVal 5th%ile',
+              'ToxVal 5th%ile',
               'ToxVal 25th%ile')
 
 RMSE <- c(aed.toxval5.rmse,
@@ -1799,6 +1825,7 @@ RMSE <- c(aed.toxval5.rmse,
           aedmed.toxval25.rmse,
           aedmed.toxval30.rmse,
           model.aedtriage5.asnm.rmse,
+          model.aedtriage25.toxval5.rmse,
           model.aedtriage25.asnm.rmse,
           1.27,
           1.07
@@ -1817,6 +1844,7 @@ R2 <- c(aed.toxval5.r2,
           aedmed.toxval25.r2,
           aedmed.toxval30.r2,
           model.aedtriage5.asnm.r2,
+        model.aedtriage25.toxval5.r2,
           model.aedtriage25.asnm.r2,
         0.172,
         0.197)
