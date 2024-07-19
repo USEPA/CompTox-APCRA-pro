@@ -19,8 +19,13 @@ output:
 
 ```{r setup, warning=FALSE, message=FALSE, echo=FALSE}
 library(caret)
+#if (!require("BiocManager", quietly = TRUE))
+#  install.packages("BiocManager")
+
+#BiocManager::install("ComplexHeatmap")
 library(circlize)
 library(ComplexHeatmap)
+
 library(cowplot)
 library(data.table)
 library(DescTools)
@@ -245,10 +250,12 @@ dev.off()
 ## Load Data
 
 ```{r load-seem3, warning=FALSE}
-seem3 <- fread('./source/exposure/SupTable-all.chem.preds-2018-11-28.txt')
+#seem3 <- fread('./source/exposure/SupTable-all.chem.preds-2018-11-28.txt')
+
+load("~/Papers/APCRA_pro/CompTox-APCRA-pro/source/chem/apcra_chem_ad.RData")
 ```
 
-```{r merge-seem3, warning=FALSE}
+```{r merge-seem3, warning=FALSE, eval=FALSE}
 apcra.total.seem3 <- merge.data.table(apcra.total,
                                      seem3[,c('dsstox_substance_id',
                                               'seem3',
@@ -260,17 +267,12 @@ apcra.total.seem3 <- merge.data.table(apcra.total,
                                      all.x=TRUE)
 
 apcra.total.seem3
-rm('seem3')
-```
-
-```{r exposure-pathway-reps, warning=FALSE}
-table(apcra.total.seem3$Pathway)
-
+#rm('seem3')
 ```
 
 ## Clean Data
 
-```{r expos-pathway-cleanup, warning=FALSE}
+```{r expos-pathway-cleanup, warning=FALSE, eval=FALSE}
 
 apcra.total.seem3 <- apcra.total.seem3 %>%
   mutate(Pathway = str_replace_all(Pathway, 'Consumer', 'Cons.')) %>%
@@ -299,6 +301,7 @@ apcra.total.seem3 <- apcra.total.seem3 %>%
 
 head(apcra.total.seem3)
 ```
+
 ```{r more-data-cleaning, warning=FALSE}
 
 
@@ -460,7 +463,7 @@ test.opera.pred[is.na(log10VP), logVP.indicator :=2] # out of domain
 ## Create visualization for chemical AD
 * What is the chemical screening applicability domain?
 
-```{r, warning=FALSE}
+```{r, warning=FALSE, eval=FALSE}
 
 ad.tbl <- merge.data.table(apcra.list.aqc[, c('DTXSID',
                                               'CASRN',
@@ -488,9 +491,15 @@ ad.tbl[,half.life := 1]
 load_sipes2017()
 load_pradeep2020()
 load_dawson2021()
+```
+
+```{r, warning=FALSE, eval=FALSE}
 
 ad.tbl$CASRN <- test.opera.pred$CASRN[match(ad.tbl$DTXSID,test.opera.pred$DTXSID)]
 
+```
+
+```{r, warning=FALSE}
 ad.tbl.df <- as.data.frame(subset(ad.tbl, CASRN %in% get_cheminfo(species=c('Human'))))
 ```
 
@@ -557,10 +566,6 @@ rownames(matrix) <- mat[,preferred_name]
 
 
 ```{r, warning=FALSE, fig.height=8, fig.width=8}
-
- 
-  
-
 heatmap_fig <- Heatmap(matrix = matrix, 
                        cluster_columns = FALSE,
                        cluster_rows=TRUE,
@@ -695,7 +700,7 @@ umap.pchem <- umap_df_2 %>%
   geom_label_repel(data=subset(umap_df_2, DTXSID %in% dtxsids.label),
                 aes(x=UMAP1,y=UMAP2,label=PREFERRED_NAME), 
             position=position_jitter(width = 1, height = 1),
-            fill= NA, box.padding = 1.5)
+            fill= NA, box.padding = 0)
 umap.pchem
 ```
 
@@ -720,7 +725,7 @@ fig_chems_all
 ```{r, warning=FALSE, eval=FALSE}
 
 file.dir <- paste('output/', sep='')
-file.name <- paste('/Fig_chem_pchem_funct_use_', Sys.Date(), '.tiff', sep='')
+file.name <- paste('/Fig1_chem_pchem_funct_use_', Sys.Date(), '.tiff', sep='')
 file.path <- paste(file.dir, file.name, sep='')
 dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
 tiff(file.path, width=30, height=35, units='cm', res=450)
