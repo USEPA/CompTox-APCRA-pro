@@ -37,6 +37,7 @@ library(parallel)
 library(plotly)
 library(randomForest)
 library(RMySQL)
+library(tibble)
 library(tictoc)
 library(tidyr)
 #devtools::install_git('http://ncct-bitbucket.epa.gov/scm/tox/tcpl.git', ref ='TOX-337', force=TRUE)
@@ -1787,6 +1788,56 @@ asnm.tier1.pred3.long2 <- melt.data.table(asnm.tier1.pred3.long2,
                                          value.name = c('pod'))
 
 ```
+
+Add in RMSD calculation to augment RMSE and R2 from linear comparisons.
+
+```{r rmsd-function, warning=FALSE}
+
+rmsd <- function(x,y){
+  # # check whether the length of the vectors being compared is different
+  if(length(x)!=length(y)){
+    stop("Length of x and y differ. Note elements should be matched pairs")
+  }
+  # obtain the difference between x and y
+  d <- y - x
+  # remove any cases where the difference is NA
+  if(any(is.na(d))==TRUE){d <- d[-which(is.na(d))]}
+  # obtain the root mean squared difference (RMSD)
+  out <- sqrt(mean(d^2))
+  # return the results
+  return(out)
+}
+```
+
+```{r, warning=FALSE}
+
+rmsd.summary <- asnm.tier1.pred3 %>%
+  dplyr::summarise(.data = .,
+                   rmsd_p5_min = rmsd(min.aed50, p5.toxval.numeric),
+                   rmsd_p10_min = rmsd(min.aed50, p10.toxval.numeric),
+                   rmsd_p15_min = rmsd(min.aed50, p15.toxval.numeric),
+                   rmsd_p20_min = rmsd(min.aed50, p20.toxval.numeric),
+                   rmsd_p25_min = rmsd(min.aed50, p25.toxval.numeric),
+                   rmsd_p30_min = rmsd(min.aed50, p30.toxval.numeric),
+                   rmsd_p5_med = rmsd(med.aed50, p5.toxval.numeric),
+                   rmsd_p10_med = rmsd(med.aed50, p10.toxval.numeric),
+                   rmsd_p15_med = rmsd(med.aed50, p15.toxval.numeric),
+                   rmsd_p20_med = rmsd(med.aed50, p20.toxval.numeric),
+                   rmsd_p25_med = rmsd(med.aed50, p25.toxval.numeric),
+                   rmsd_p30_med = rmsd(med.aed50, p30.toxval.numeric))
+
+rmsd.summary <-  t(rmsd.summary) %>% as.data.frame()
+rmsd.summary <- rownames_to_column(rmsd.summary, var="RMSD type")
+rename(rmsd.summary, RMSD = V1)
+
+```
+
+
+
+
+
+```
+
 
 Create a summary table of model with R2 and RMSE.
 
