@@ -1830,14 +1830,8 @@ rmsd.summary <-  t(rmsd.summary) %>% as.data.frame()
 rmsd.summary <- rownames_to_column(rmsd.summary, var="RMSD type")
 rename(rmsd.summary, RMSD = V1)
 
+rmsd.summary
 ```
-
-
-
-
-
-```
-
 
 Create a summary table of model with R2 and RMSE.
 
