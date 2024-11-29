@@ -35,6 +35,7 @@ library(jtools)
 library(openxlsx)
 library(parallel)
 library(plotly)
+library(purrr)
 library(randomForest)
 library(RMySQL)
 library(tibble)
@@ -1368,48 +1369,38 @@ asnm.tier1.pred3[,min.aed50 := as.numeric(min.aed50)]
 ```
 
 ```{r, warning=FALSE}
-
 # min AED vs toxval 5th %ile
 aed.toxval5 <- lm(p5.toxval.numeric ~ min.aed50, 
             data= asnm.tier1.pred3)
 summary(aed.toxval5)
-aed.toxval5.rmse <- round(sqrt(mean(aed.toxval5$residuals^2)),3)
-aed.toxval5.r2 <- round(summary(aed.toxval5)$r.squared,3)
+#aed.toxval5.rmse <- round(sqrt(mean(aed.toxval5$residuals^2)),3)
+#aed.toxval5.r2 <- round(summary(aed.toxval5)$r.squared,3)
 
 # min AED vs toxval 10th %ile
 aed.toxval10 <- lm(p10.toxval.numeric ~ min.aed50, 
             data= asnm.tier1.pred3)
 summary(aed.toxval10)
-aed.toxval10.rmse <- round(sqrt(mean(aed.toxval10$residuals^2)),3)
-aed.toxval10.r2 <- round(summary(aed.toxval10)$r.squared,3)
 
 # min AED vs toxval 15th %ile
 aed.toxval15 <- lm(p15.toxval.numeric ~ min.aed50, 
             data= asnm.tier1.pred3)
 summary(aed.toxval15)
-aed.toxval15.rmse <- round(sqrt(mean(aed.toxval15$residuals^2)),3)
-aed.toxval15.r2 <- round(summary(aed.toxval15)$r.squared,3)
 
 # min AED vs toxval 20th %ile
 aed.toxval20 <- lm(p20.toxval.numeric ~ min.aed50, 
             data= asnm.tier1.pred3)
 summary(aed.toxval20)
-aed.toxval20.rmse <- round(sqrt(mean(aed.toxval20$residuals^2)),3)
-aed.toxval20.r2 <- round(summary(aed.toxval20)$r.squared,3)
 
 # min AED vs toxval 25th %ile
 aed.toxval25 <- lm(p25.toxval.numeric ~ min.aed50, 
             data= asnm.tier1.pred3)
 summary(aed.toxval25)
-aed.toxval25.rmse <- round(sqrt(mean(aed.toxval25$residuals^2)),3)
-aed.toxval25.r2 <- round(summary(aed.toxval25)$r.squared,3)
 
 # min AED vs toxval 30th %ile
 aed.toxval30 <- lm(p30.toxval.numeric ~ min.aed50, 
             data= asnm.tier1.pred3)
 summary(aed.toxval30)
-aed.toxval30.rmse <- round(sqrt(mean(aed.toxval30$residuals^2)),3)
-aed.toxval30.r2 <- round(summary(aed.toxval30)$r.squared,3)
+
 ```
 
 ## Median AED50 vs ToxVal PODs
@@ -1434,48 +1425,247 @@ First show med AED50 v 5th %ile POD
 aedmed.toxval5 <- lm(p5.toxval.numeric ~ med.aed50, 
             data= asnm.tier1.pred3)
 summary(aedmed.toxval5)
-aedmed.toxval5.rmse <- round(sqrt(mean(aedmed.toxval5$residuals^2)),3)
-aedmed.toxval5.r2 <- round(summary(aedmed.toxval5)$r.squared,3)
 
 # med AED vs toxval 10th %ile
 aedmed.toxval10 <- lm(p10.toxval.numeric ~ med.aed50, 
             data= asnm.tier1.pred3)
 #summary(aedmed.toxval10)
-aedmed.toxval10.rmse <- round(sqrt(mean(aedmed.toxval10$residuals^2)),3)
-aedmed.toxval10.r2 <- round(summary(aedmed.toxval10)$r.squared,3)
 
 # med AED vs toxval 15th %ile
 aedmed.toxval15 <- lm(p15.toxval.numeric ~ med.aed50, 
             data= asnm.tier1.pred3)
 #summary(aedmed.toxval15)
-aedmed.toxval15.rmse <- round(sqrt(mean(aedmed.toxval15$residuals^2)),3)
-aedmed.toxval15.r2 <- round(summary(aedmed.toxval15)$r.squared,3)
 
 # med AED vs toxval 20th %ile
 aedmed.toxval20 <- lm(p20.toxval.numeric ~ med.aed50, 
             data= asnm.tier1.pred3)
 #summary(aedmed.toxval20)
-aedmed.toxval20.rmse <- round(sqrt(mean(aedmed.toxval20$residuals^2)),3)
-aedmed.toxval20.r2 <- round(summary(aedmed.toxval20)$r.squared,3)
-```
 
-Here show med AED50 vs 25th%-ile POD
+```
 ```{r, warning=FALSE}
 # med AED vs toxval 25th %ile
 aedmed.toxval25 <- lm(p25.toxval.numeric ~ med.aed50, 
             data= asnm.tier1.pred3)
 summary(aedmed.toxval25)
-aedmed.toxval25.rmse <- round(sqrt(mean(aedmed.toxval25$residuals^2)),3)
-aedmed.toxval25.r2 <- round(summary(aedmed.toxval25)$r.squared,3)
 
 # med AED vs toxval 30th %ile
 aedmed.toxval30 <- lm(p30.toxval.numeric ~ med.aed50, 
             data= asnm.tier1.pred3)
-#summary(aedmed.toxval30)
-aedmed.toxval30.rmse <- round(sqrt(mean(aedmed.toxval30$residuals^2)),3)
-aedmed.toxval30.r2 <- round(summary(aedmed.toxval30)$r.squared,3)
+summary(aedmed.toxval30)
+
 
 ```
+### Adding calculation of broad NAMs min and med
+Need to demonstrate combination of NAMs
+
+```{r broad-summary-calcs, warning=FALSE}
+# Calculate min broad
+
+asnm.tier1.pred3[,min.aed50.broad := min(aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+# Calculate med broad
+
+asnm.tier1.pred3[,med.aed50.broad := median(aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+# Calculate min targeted
+
+asnm.tier1.pred3[,min.aed50.targeted := min(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+# Calculate med targeted
+
+asnm.tier1.pred3[,med.aed50.targeted := median(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+```
+
+Compute the broad median AED50s vs ToxVal %iles.
+
+```{r broad-med-linear-comps, warning=FALSE}
+
+# med AED broad vs toxval 5th %ile
+aedmedbroad.toxval5 <- lm(p5.toxval.numeric ~ med.aed50.broad, 
+            data= asnm.tier1.pred3)
+summary(aedmedbroad.toxval5)
+
+# med broad AED vs toxval 10th %ile
+aedmedbroad.toxval10 <- lm(p10.toxval.numeric ~ med.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+# med broad AED vs toxval 15th %ile
+aedmedbroad.toxval15 <- lm(p15.toxval.numeric ~ med.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+# med broad AED vs toxval 20th %ile
+aedmedbroad.toxval20 <- lm(p20.toxval.numeric ~ med.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+# med broad AED vs toxval 25th %ile
+aedmedbroad.toxval25 <- lm(p25.toxval.numeric ~ med.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+# med broad AED vs toxval 30th %ile
+aedmedbroad.toxval30 <- lm(p30.toxval.numeric ~ med.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+```
+
+Compute the broad minimum AED50s vs ToxVal %iles.
+
+```{r broad-min-linear-comps, warning=FALSE}
+
+# min AED broad vs toxval 5th %ile
+aedminbroad.toxval5 <- lm(p5.toxval.numeric ~ min.aed50.broad, 
+            data= asnm.tier1.pred3)
+summary(aedminbroad.toxval5)
+
+# med broad AED vs toxval 10th %ile
+aedminbroad.toxval10 <- lm(p10.toxval.numeric ~ min.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+# med broad AED vs toxval 15th %ile
+aedminbroad.toxval15 <- lm(p15.toxval.numeric ~ min.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+# min broad AED vs toxval 20th %ile
+aedminbroad.toxval20 <- lm(p20.toxval.numeric ~ min.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+# min broad AED vs toxval 25th %ile
+aedminbroad.toxval25 <- lm(p25.toxval.numeric ~ min.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+# min broad AED vs toxval 30th %ile
+aedminbroad.toxval30 <- lm(p30.toxval.numeric ~ min.aed50.broad, 
+            data= asnm.tier1.pred3)
+
+```
+
+Compute the targeted median AED50s vs ToxVal %iles.
+
+```{r targeted-med-linear-comps, warning=FALSE}
+
+# med AED targeted vs toxval 5th %ile
+aedmedtargeted.toxval5 <- lm(p5.toxval.numeric ~ med.aed50.targeted, 
+            data= asnm.tier1.pred3)
+summary(aedmedtargeted.toxval5)
+
+# med targeted AED vs toxval 10th %ile
+aedmedtargeted.toxval10 <- lm(p10.toxval.numeric ~ med.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+# med targeted AED vs toxval 15th %ile
+aedmedtargeted.toxval15 <- lm(p15.toxval.numeric ~ med.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+# med targeted AED vs toxval 20th %ile
+aedmedtargeted.toxval20 <- lm(p20.toxval.numeric ~ med.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+# med targeted AED vs toxval 25th %ile
+aedmedtargeted.toxval25 <- lm(p25.toxval.numeric ~ med.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+# med targeted AED vs toxval 30th %ile
+aedmedtargeted.toxval30 <- lm(p30.toxval.numeric ~ med.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+```
+
+Compute the targeted minimum AED50s vs ToxVal %iles.
+
+```{r targeted-min-linear-comps, warning=FALSE}
+
+# min AED targeted vs toxval 5th %ile
+aedmintargeted.toxval5 <- lm(p5.toxval.numeric ~ min.aed50.targeted, 
+            data= asnm.tier1.pred3)
+summary(aedmintargeted.toxval5)
+
+# min targeted AED vs toxval 10th %ile
+aedmintargeted.toxval10 <- lm(p10.toxval.numeric ~ min.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+# min targeted AED vs toxval 15th %ile
+aedmintargeted.toxval15 <- lm(p15.toxval.numeric ~ min.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+# min targeted AED vs toxval 20th %ile
+aedmintargeted.toxval20 <- lm(p20.toxval.numeric ~ min.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+# min targeted AED vs toxval 25th %ile
+aedmintargeted.toxval25 <- lm(p25.toxval.numeric ~ min.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+# min targeted AED vs toxval 30th %ile
+aedmintargeted.toxval30 <- lm(p30.toxval.numeric ~ min.aed50.targeted, 
+            data= asnm.tier1.pred3)
+
+```
+Targeted NAMs individually
+
+
+```{r targeted-individ-linear-comps, warning=FALSE}
+
+# ATG vs toxval 5th %ile
+aedatg.toxval5 <- lm(p5.toxval.numeric ~ aed50.atg, 
+            data= asnm.tier1.pred3)
+
+# BSK vs toxval 5th %ile
+aedbsk.toxval5 <- lm(p5.toxval.numeric ~ aed50.bsk, 
+            data= asnm.tier1.pred3)
+
+# NVS vs toxval 5th %ile
+aednvs.toxval5 <- lm(p5.toxval.numeric ~ aed50.nvs, 
+            data= asnm.tier1.pred3)
+
+# STM vs toxval 5th %ile
+aedstm.toxval5 <- lm(p5.toxval.numeric ~ aed50.stm, 
+            data= asnm.tier1.pred3)
+```
+
+Broad NAMs individually
+
+```{r, warning=FALSE}
+
+# HTPP U2-OS vs toxval 5th %ile
+aedhtpp.toxval5 <- lm(p5.toxval.numeric ~ aed50.htpp.u2os, 
+            data= asnm.tier1.pred3)
+
+# HTTr U2-OS vs toxval 5th %ile
+aedhttru2os.toxval5 <- lm(p5.toxval.numeric ~ aed50.httr.u2os, 
+            data= asnm.tier1.pred3)
+
+# HTTr MCF7 vs toxval 5th %ile
+aedhttrmcf7.toxval5 <- lm(p5.toxval.numeric ~ aed50.httr.mcf7, 
+            data= asnm.tier1.pred3)
+
+# HTTr HepaRG vs toxval 5th %ile
+aedhttrheparg.toxval5 <- lm(p5.toxval.numeric ~ aed50.httr.heparg, 
+            data= asnm.tier1.pred3)
+
+```
+
+A*STAR individually
+
+```{r, warning=FALSE}
+
+# ASTAR BEAS-2B vs toxval 5th %ile
+aedastarbeas2b.toxval5 <- lm(p5.toxval.numeric ~ aed50.astar.beas2b, 
+            data= asnm.tier1.pred3)
+
+# ASTAR HEPG2 vs toxval 5th %ile
+aedastarhepg2.toxval5 <- lm(p5.toxval.numeric ~ aed50.astar.hepg2, 
+            data= asnm.tier1.pred3)
+
+# ASTAR HEK293 vs toxval 5th %ile
+aedastarhek293.toxval5 <- lm(p5.toxval.numeric ~ aed50.astar.hek293, 
+            data= asnm.tier1.pred3)
+
+```
+
 
 ### MLR model for 5th%ile ToxVal
 
@@ -1582,7 +1772,7 @@ names(coeff.tbl25)[1] <- "mlr_coeff"
 coeff.tbl25 <- as.data.table(coeff.tbl25)
 ```
 
-Make the MLR prediction for the 25th %ile ToxVal POD using the coefficients of the model.
+Make the MLR prediction for the 25th %ile ToxVal POD using the model coefficients table.
 
 ```{r, warning=FALSE}
 asnm.tier1.pred3[,mlr.aed50.toxval25 := (coeff.tbl25[var_name=="aed50.atg"]$mlr_coeff)*aed50.atg 
@@ -1597,13 +1787,11 @@ asnm.tier1.pred3[,mlr.aed50.toxval25 := (coeff.tbl25[var_name=="aed50.atg"]$mlr_
                  + (coeff.tbl25[var_name=="aed50.astar.beas2b"]$mlr_coeff)*aed50.astar.beas2b
                  + (coeff.tbl25[var_name=="aed50.astar.hepg2"]$mlr_coeff)*aed50.astar.hepg2
                  + (coeff.tbl25[var_name=="aed50.astar.hek293"]$mlr_coeff)*aed50.astar.hek293] 
-
 ```
 
-### Add in MLR predictions to spreadsheet
+### Add in MLR predictions to the prediction table
 
 ```{r, warning=FALSE}
-colnames(asnm.tier1.pred3)
 asnm.tier1.pred3[, mlr.pred5 := predict(model.aedtriage5.asnm, .SD), .SDcols = c(29:41)]
 asnm.tier1.pred3[, mlr.pred25 := predict(model.aedtriage25.asnm, .SD), .SDcols = c(29:40,45)]
 ```
@@ -1618,6 +1806,7 @@ model.aedtriage25.asnm.rmse <- round(sqrt(mean(model.aedtriage25.asnm$residuals^
 model.aedtriage25.asnm.r2 <- round(summary(model.aedtriage25.asnm)$r.squared,3)
 
 ```
+
 ```{r, warning=FALSE}
 
 mlr.eval5 <- lm(p5.toxval.numeric ~ mlr.pred5, 
@@ -1638,11 +1827,9 @@ mlr.eval25.toxval5 <- lm(p5.toxval.numeric ~ mlr.pred25,
 model.aedtriage25.toxval5.rmse <- round(sqrt(mean(mlr.eval25.toxval5$residuals^2)),3)
 model.aedtriage25.toxval5.r2 <- round(summary(mlr.eval25.toxval5)$r.squared,3)
 
-
-
 ```
-```{r, warning=FALSE}
 
+```{r, warning=FALSE}
 mlr.eval5 <- lm(p5.toxval.numeric ~ mlr.pred5, 
             data= asnm.tier1.pred3)
 
@@ -1654,7 +1841,6 @@ mlr.eval25 <- lm(p25.toxval.numeric ~ mlr.pred25,
 
 model.aedtriage25.asnm.rmse <- round(sqrt(mean(mlr.eval25$residuals^2)),3)
 model.aedtriage25.asnm.r2 <- round(summary(mlr.eval25)$r.squared,3)
-
 
 ```
 
@@ -1672,8 +1858,7 @@ ggplot(asnm.tier1.pred3)+
 ```
 
 I tried adding in RF models for 5th and 25th percentile ToxVal POD.
-However what you find is how inappropriate it is to use the RF model to predict the data it was trained on. The performance values are artificially inflated.
-So these RF predictions were removed because basically all we can look at is training performance.
+However what you find is how inappropriate it is to use the RF model to predict the data it was trained on. The performance values are artificially inflated and not very meaningful.
 
 ```{r, warning=FALSE, eval=FALSE}
 
@@ -1681,6 +1866,26 @@ asnm.tier1.pred3[, rf.pred5 := predict(rf_aedtriage5, .SD), .SDcols = c(29:41)]
 asnm.tier1.pred3[, rf.pred25 := predict(rf_aedtriage25, .SD), .SDcols = c(29:40,45)]
 asnm.tier1.pred3[,c('rf.pred5',
                      'rf.pred25'):= NULL]
+```
+
+Add in the min and med of the broad and targeted NAMs to the predictions table.
+
+```{r, warning=FALSE}
+# Calculate median of targeted NAMs
+asnm.tier1.pred3[,med.targeted.aed50 := median(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+# Calculate minimum of targeted NAMs
+asnm.tier1.pred3[,min.targeted.aed50 := min(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+# Calculate median of broad NAMs
+asnm.tier1.pred3[,med.broad.aed50 := median(aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, na.rm=TRUE), by=c('dsstox_substance_id')]
+
+# Calculate minimum of targeted NAMs
+asnm.tier1.pred3[,min.broad.aed50 := min(aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, na.rm=TRUE), by=c('dsstox_substance_id')]
 ```
 
 # Visualization and Comparison {.tabset .tabset-fade .tabset-pills}
@@ -1759,11 +1964,6 @@ aed.asnm.lm
 ```
 ## Min, Med, MLR, RF
 
-```{r, warning=FALSE}
-
-colnames(asnm.tier1.pred3)
-```
-
 Need longformat of all AED50 values by source and ToxVal PODs.
 ```{r, warning=FALSE}
 
@@ -1774,7 +1974,11 @@ asnm.tier1.pred3.long2 <- melt.data.table(asnm.tier1.pred3,
                                          measure.vars = c('min.aed50',
                                                           'med.aed50',
                                                           'mlr.pred5',
-                                                          'mlr.pred25'),
+                                                          'mlr.pred25',
+                                                          'min.targeted.aed50',
+                                                          'min.broad.aed50',
+                                                          'med.targeted.aed50',
+                                                          'med.broad.aed50'),
                                          variable.name = c('model.type'),
                                          value.name = c('model.value'))
 
@@ -1819,108 +2023,326 @@ rmsd.summary <- asnm.tier1.pred3 %>%
                    rmsd_p20_min = rmsd(min.aed50, p20.toxval.numeric),
                    rmsd_p25_min = rmsd(min.aed50, p25.toxval.numeric),
                    rmsd_p30_min = rmsd(min.aed50, p30.toxval.numeric),
+                   
                    rmsd_p5_med = rmsd(med.aed50, p5.toxval.numeric),
                    rmsd_p10_med = rmsd(med.aed50, p10.toxval.numeric),
                    rmsd_p15_med = rmsd(med.aed50, p15.toxval.numeric),
                    rmsd_p20_med = rmsd(med.aed50, p20.toxval.numeric),
                    rmsd_p25_med = rmsd(med.aed50, p25.toxval.numeric),
-                   rmsd_p30_med = rmsd(med.aed50, p30.toxval.numeric))
+                   rmsd_p30_med = rmsd(med.aed50, p30.toxval.numeric),
+                   
+                   rmsd_p5_min_broad = rmsd(min.broad.aed50, p5.toxval.numeric),
+                   rmsd_p10_min_broad = rmsd(min.broad.aed50, p10.toxval.numeric),
+                   rmsd_p15_min_broad = rmsd(min.broad.aed50, p15.toxval.numeric),
+                   rmsd_p20_min_broad = rmsd(min.broad.aed50, p20.toxval.numeric),
+                   rmsd_p25_min_broad = rmsd(min.broad.aed50, p25.toxval.numeric),
+                   rmsd_p30_min_broad = rmsd(min.broad.aed50, p30.toxval.numeric),
+                   
+                   rmsd_p5_min_targ = rmsd(min.targeted.aed50, p5.toxval.numeric),
+                   rmsd_p10_min_targ = rmsd(min.targeted.aed50, p10.toxval.numeric),
+                   rmsd_p15_min_targ = rmsd(min.targeted.aed50, p15.toxval.numeric),
+                   rmsd_p20_min_targ = rmsd(min.targeted.aed50, p20.toxval.numeric),
+                   rmsd_p25_min_targ = rmsd(min.targeted.aed50, p25.toxval.numeric),
+                   rmsd_p30_min_targ = rmsd(min.targeted.aed50, p30.toxval.numeric),
+                   
+                   rmsd_p5_med_broad = rmsd(med.broad.aed50, p5.toxval.numeric),
+                   rmsd_p10_med_broad = rmsd(med.broad.aed50, p10.toxval.numeric),
+                   rmsd_p15_med_broad = rmsd(med.broad.aed50, p15.toxval.numeric),
+                   rmsd_p20_med_broad = rmsd(med.broad.aed50, p20.toxval.numeric),
+                   rmsd_p25_med_broad = rmsd(med.broad.aed50, p25.toxval.numeric),
+                   rmsd_p30_med_broad = rmsd(med.broad.aed50, p30.toxval.numeric),
+                   
+                   rmsd_p5_med_targ = rmsd(med.targeted.aed50, p5.toxval.numeric),
+                   rmsd_p10_med_targ = rmsd(med.targeted.aed50, p10.toxval.numeric),
+                   rmsd_p15_med_targ = rmsd(med.targeted.aed50, p15.toxval.numeric),
+                   rmsd_p20_med_targ = rmsd(med.targeted.aed50, p20.toxval.numeric),
+                   rmsd_p25_med_targ = rmsd(med.targeted.aed50, p25.toxval.numeric),
+                   rmsd_p30_med_targ = rmsd(med.targeted.aed50, p30.toxval.numeric),
+                   
+                   rmsd_p5_atg = rmsd(aed50.atg, p5.toxval.numeric),
+                   rmsd_p5_bsk = rmsd(aed50.bsk, p5.toxval.numeric),
+                   rmsd_p5_nvs = rmsd(aed50.nvs, p5.toxval.numeric),
+                   rmsd_p5_stm = rmsd(aed50.stm, p5.toxval.numeric),
+                   
+                   rmsd_p5_htpp_u2os = rmsd(aed50.htpp.u2os, p5.toxval.numeric),
+                   rmsd_p5_httr_heparg = rmsd(aed50.httr.heparg, p5.toxval.numeric),
+                   rmsd_p5_httr_mcf7 = rmsd(aed50.httr.mcf7, p5.toxval.numeric),
+                   rmsd_p5_httr_u2os = rmsd(aed50.httr.u2os, p5.toxval.numeric),
+                   
+                   rmsd_p5_astar_beas2b = rmsd(aed50.astar.beas2b, p5.toxval.numeric),
+                   rmsd_p5_astar_hek293 = rmsd(aed50.astar.hek293, p5.toxval.numeric),
+                   rmsd_p5_astar_hepg2 = rmsd(aed50.astar.hepg2, p5.toxval.numeric),
+                   
+                   rmsd_p5_mlr5 = rmsd(mlr.aed50.toxval5, p5.toxval.numeric),
+                   rmsd_p25_mlr25 = rmsd(mlr.aed50.toxval25, p25.toxval.numeric)
+                   )
 
 rmsd.summary <-  t(rmsd.summary) %>% as.data.frame()
 rmsd.summary <- rownames_to_column(rmsd.summary, var="RMSD type")
-rename(rmsd.summary, RMSD = V1)
+rmsd.summary <- rename(rmsd.summary, RMSD = V1)
 
 rmsd.summary
 ```
 
 Create a summary table of model with R2 and RMSE.
+Modified significantly at R1 to add in more models and more easily calculate RMSE and R2.
 
 ```{r, warning=FALSE}
 
-model.type <- c('min AED50',
-                'min AED50',
-                'min AED50',
-                'min AED50',
-                'min AED50',
-                'min AED50',
-                'med AED50',
-                'med AED50',
-                'med AED50',
-                'med AED50',
-                'med AED50',
-                'med AED50',
-                'mlr AED50 trained to ToxVal5',
-                'mlr AED50 trained to ToxVal25',
-                'mlr AED50 trained to ToxVal25',
-                'rf AED50',
-                'rf AED50')
+# develop model list for functions
 
-pod.type <- c('ToxVal 5th%ile',
-              'ToxVal 10th%ile',
-              'ToxVal 15th%ile',
-              'ToxVal 20th%ile',
-              'ToxVal 25th%ile',
-              'ToxVal 30th%ile',
-              'ToxVal 5th%ile',
-              'ToxVal 10th%ile',
-              'ToxVal 15th%ile',
-              'ToxVal 20th%ile',
-              'ToxVal 25th%ile',
-              'ToxVal 30th%ile',
-              'ToxVal 5th%ile',
-              'ToxVal 25th%ile',
-              'ToxVal 5th%ile',
-              'ToxVal 5th%ile',
-              'ToxVal 25th%ile')
+model_list <- list(
+          # battery min models
+          aed.toxval5,
+          aed.toxval10,
+          aed.toxval15,
+          aed.toxval20,
+          aed.toxval25,
+          aed.toxval30,
+          
+          # battery med models
+          aedmed.toxval5,
+          aedmed.toxval10,
+          aedmed.toxval15,
+          aedmed.toxval20,
+          aedmed.toxval25,
+          aedmed.toxval30,
+          
+          # min broad battery
+          aedminbroad.toxval5,
+          aedminbroad.toxval10,
+          aedminbroad.toxval15,
+          aedminbroad.toxval20,
+          aedminbroad.toxval25,
+          aedminbroad.toxval30,
+          
+          # min targeted battery
+          aedmintargeted.toxval5,
+          aedmintargeted.toxval10,
+          aedmintargeted.toxval15,
+          aedmintargeted.toxval20,
+          aedmintargeted.toxval25,
+          aedmintargeted.toxval30,
+          
+          # med broad battery
+          aedmedbroad.toxval5,
+          aedmedbroad.toxval10,
+          aedmedbroad.toxval15,
+          aedmedbroad.toxval20,
+          aedmedbroad.toxval25,
+          aedmedbroad.toxval30,
+          
+          # med targeted battery
+          aedmedtargeted.toxval5,
+          aedmedtargeted.toxval10,
+          aedmedtargeted.toxval15,
+          aedmedtargeted.toxval20,
+          aedmedtargeted.toxval25,
+          aedmedtargeted.toxval30,
+          
+          # individ assay models
+          aedatg.toxval5,
+          aedbsk.toxval5,
+          aednvs.toxval5,
+          aedstm.toxval5,
+          
+          aedhtpp.toxval5,
+          aedhttrheparg.toxval5,
+          aedhttrmcf7.toxval5,
+          aedhttru2os.toxval5,
+          
+          aedastarbeas2b.toxval5,
+          aedastarhek293.toxval5,
+          aedastarhepg2.toxval5,
+          
+          
+          # battery mlr models
+          mlr.eval5,
+          mlr.eval25,
+          mlr.eval25.toxval5)
 
-RMSE <- c(aed.toxval5.rmse,
-          aed.toxval10.rmse,
-          aed.toxval15.rmse,
-          aed.toxval20.rmse,
-          aed.toxval25.rmse,
-          aed.toxval30.rmse,
-          aedmed.toxval5.rmse,
-          aedmed.toxval10.rmse,
-          aedmed.toxval15.rmse,
-          aedmed.toxval20.rmse,
-          aedmed.toxval25.rmse,
-          aedmed.toxval30.rmse,
-          model.aedtriage5.asnm.rmse,
-          model.aedtriage25.toxval5.rmse,
-          model.aedtriage25.asnm.rmse,
-          1.27,
-          1.07
-          )
 
-R2 <- c(aed.toxval5.r2,
-          aed.toxval10.r2,
-          aed.toxval15.r2,
-          aed.toxval20.r2,
-          aed.toxval25.r2,
-          aed.toxval30.r2,
-          aedmed.toxval5.r2,
-          aedmed.toxval10.r2,
-          aedmed.toxval15.r2,
-          aedmed.toxval20.r2,
-          aedmed.toxval25.r2,
-          aedmed.toxval30.r2,
-          model.aedtriage5.asnm.r2,
-        model.aedtriage25.toxval5.r2,
-          model.aedtriage25.asnm.r2,
-        0.172,
-        0.197)
+# function to calculate RMSE
 
+model_list_rmse <- function(model) {
+  round(sqrt(mean(model$residuals^2)),3)
+}
 
-summ <- data.table(model.type,
-                   pod.type,
-                   RMSE,
-                   R2)
+# function to calculate R-squared
 
-setnames(summ, c('model.type','pod.type','RMSE','R2'),c('Model Type','ToxVal POD Type','RMSE','R2'))
-summ
+model_list_r2 <- function(model) {
+  round(summary(model)$r.squared,3)
+}
+
+# apply rmse and r2 functions to list
+
+models_rmse <- model_list %>% {
+  tibble(rmse = map_dbl(., model_list_rmse))}
+
+models_r2 <- model_list %>% {
+  tibble(r2 = map_dbl(., model_list_r2))}
 
 ```
 
+```{r, warning=FALSE}
+# add in model name
+models_names <- c('min AED50',
+                'min AED50',
+                'min AED50',
+                'min AED50',
+                'min AED50',
+                'min AED50',
+                'med AED50',
+                'med AED50',
+                'med AED50',
+                'med AED50',
+                'med AED50',
+                'med AED50',
+                
+                # adding for R1: broad vs targeted parts of the battery
+                'min AED50, broad',
+                'min AED50, broad',
+                'min AED50, broad',
+                'min AED50, broad',
+                'min AED50, broad',
+                'min AED50, broad',
+                'min AED50, targeted',
+                'min AED50, targeted',
+                'min AED50, targeted',
+                'min AED50, targeted',
+                'min AED50, targeted',
+                'min AED50, targeted',
+                
+                'med AED50, broad',
+                'med AED50, broad',
+                'med AED50, broad',
+                'med AED50, broad',
+                'med AED50, broad',
+                'med AED50, broad',
+                'med AED50, targeted',
+                'med AED50, targeted',
+                'med AED50, targeted',
+                'med AED50, targeted',
+                'med AED50, targeted',
+                'med AED50, targeted',
+                
+                # adding for R1: each assay technology in isolation
+                'ATG AED50', #1
+                'BSK AED50', #2
+                'NVS AED50', #3
+                'STM AED50', #4
+                'HTPP U2-OS AED50', #5
+                
+                'HTTr HepaRG AED50',#6
+                'HTTr MCF7 AED50',#7
+                'HTTr U2-OS AED50',#8
+                
+                'ASTAR BEAS-2B AED50', #9
+                'ASTAR HepG2 AED50',#10
+                'ASTAR HK-2 AED50',#11
+                
+                'mlr AED50 trained to ToxVal5',
+                'mlr AED50 trained to ToxVal25',
+                'mlr AED50 trained to ToxVal25 eval ToxVal5' )
+
+
+```
+
+```{r, warning=FALSE}
+pod.type <- c('ToxVal 5th%ile', # min battery
+              'ToxVal 10th%ile',
+              'ToxVal 15th%ile',
+              'ToxVal 20th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 30th%ile',
+              
+              'ToxVal 5th%ile', # med battery
+              'ToxVal 10th%ile',
+              'ToxVal 15th%ile',
+              'ToxVal 20th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 30th%ile',
+              
+              'ToxVal 5th%ile', # min broad
+              'ToxVal 10th%ile',
+              'ToxVal 15th%ile',
+              'ToxVal 20th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 30th%ile',
+              
+              'ToxVal 5th%ile', # min targeted
+              'ToxVal 10th%ile',
+              'ToxVal 15th%ile',
+              'ToxVal 20th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 30th%ile',
+              
+              'ToxVal 5th%ile', # med broad
+              'ToxVal 10th%ile',
+              'ToxVal 15th%ile',
+              'ToxVal 20th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 30th%ile',
+              
+              'ToxVal 5th%ile', # med targeted
+              'ToxVal 10th%ile',
+              'ToxVal 15th%ile',
+              'ToxVal 20th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 30th%ile',
+              
+              'ToxVal 5th%ile', #1
+              'ToxVal 5th%ile', #2
+              'ToxVal 5th%ile', #3
+              'ToxVal 5th%ile',#4
+              'ToxVal 5th%ile',#5
+              'ToxVal 5th%ile',#6
+              'ToxVal 5th%ile',#7
+              'ToxVal 5th%ile',#8
+              'ToxVal 5th%ile',#9
+              'ToxVal 5th%ile',#10
+              'ToxVal 5th%ile',#11
+             
+               'ToxVal 5th%ile',
+              'ToxVal 25th%ile',
+              'ToxVal 5th%ile'
+              
+              )
+
+```
+
+Bind all and neaten the dataframe
+
+```{r, warning=FALSE}
+# bind
+rmsd.summary <- rbind(rmsd.summary, c('mlr_toxval25_vp5', NA))
+models_performance_summary <- as.data.table(bind_cols(models_rmse, models_r2, rmsd.summary, models_names, pod.type))
+
+setcolorder(models_performance_summary, c('...5','...6','rmse','r2','RMSD','RMSD type'))
+setnames(models_performance_summary, c('...5','...6','rmse','r2'), c('Model Type', 'POD Type','RMSE','R2'))
+
+models_performance_summary[,RMSD := as.numeric(RMSD)]
+models_performance_summary[, RMSD := round(RMSD,3)]
+models_performance_summary
+```
+
+Here we write the final models performance table.
+```{r, warning=FALSE}
+# from rf_aedtriage5
+rf_mod_toxval5 <- t(as.data.frame(c('rf AED50','ToxVal 5th%ile',1.273,0.171,NA,NA)))
+# from rf_aedtriage25
+rf_mod_toxval25 <- t(as.data.frame(c('rf AED50','ToxVal 25th%ile',1.031,0.206,NA,NA)))
+
+models_performance_summary <- rbind(models_performance_summary,
+                                    rf_mod_toxval5,
+                                    rf_mod_toxval25,
+                                    use.names=FALSE)
+
+#write.csv(models_performance_summary, './output/Table2_models_performance_summary_27nov2024.csv')
+
+```
+
+This next part is a summary visualization of some of the models for the paper.
 
 ```{r, warning=FALSE, fig.height=4, fig.width=9}
 
@@ -1980,26 +2402,79 @@ aed.model.lm <- ggplot(data=asnm.tier1.pred3.long2[pod.type %in% c('p5.toxval.nu
 aed.model.lm
 
 ```
+For R1, adding targeted and broad min and med.
 
-```{r, warning=FALSE, fig.height=5}
+```{r, warning=FALSE, fig.height=4, fig.width=12}
 
-mytheme <- gridExtra::ttheme_minimal(core=list(padding.v=unit(0.1, 'mm'), padding.h=unit(0.1,'mm')))
-metric.grob <- grid.arrange(tableGrob(summ, theme=mytheme))
-#write.csv(summ, file='./output/aedmodel_performance_table.csv')
+# new facet labels
+model.labels <- c('Min Broad',
+                  'Min Targeted',
+                  'Med Broad',
+                  'Med Targeted')
+names(model.labels) <- c('min.broad.aed50','min.targeted.aed50','med.broad.aed50','med.targeted.aed50')
+
+# main plot
+aed.model.broadvtarget <- ggplot(data=asnm.tier1.pred3.long2[pod.type %in% c('p5.toxval.numeric', 
+                                                                   'p25.toxval.numeric')
+                                                   & model.type %in% c('min.broad.aed50','min.targeted.aed50',
+                                                                       'med.broad.aed50', 'med.targeted.aed50')], 
+                 aes(x=model.value, 
+                     y=pod, 
+                     color=pod.type, shape=pod.type))+
+  geom_point(aes(x=model.value, 
+                 y=pod, 
+                 color=pod.type, shape=pod.type), alpha=0.7, size=2)+
+  scale_color_manual(name='POD Type',
+                     values=c('#481567FF','#95D840FF'),
+                     labels=c('ToxVal 5th%ile', 'ToxVal 25th%ile'),
+                     breaks = c('p5.toxval.numeric',
+                                'p25.toxval.numeric'))+
+  scale_shape_manual(name='POD Type',
+                     values=c(15,17),
+                     labels=c('ToxVal 5th%ile', 'ToxVal 25th%ile'),
+                     breaks = c('p5.toxval.numeric',
+                                'p25.toxval.numeric'))+
+  scale_x_continuous(breaks=seq(-7, 5, 1))+
+  scale_y_continuous(breaks=seq(-7, 5, 1))+
+  coord_cartesian(xlim=c(-4,4), ylim=c(-4,4))+
+  theme_bw()+
+  geom_smooth(aes(group=pod.type), method='lm',se=FALSE,formula=y~x)+
+  stat_poly_eq(
+               formula=y ~x,
+               #eq.with.lhs = "y~`=`~",
+               aes(label=paste0("atop(",..rr.label..,")")),
+               parse=TRUE,
+               #label.x=c(rep('right',3), 'left'),
+               label.y=c(-2,-4),
+               label.x=c(-3,1),
+               size=5, face='bold')+
+  geom_abline(slope=1, intercept=0) +
+  geom_abline(slope=1, intercept=1, linetype="dashed") +
+  geom_abline(slope=1, intercept=-1, linetype="dashed") +
+  xlab('AED50, log10-mg/kg/day')+
+  ylab('ToxVal POD, log10-mg/kg/day')+
+   theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14))+
+  facet_wrap(~model.type, scales='fixed', labeller = labeller(model.type=model.labels), nrow=1, ncol=4)+
+  theme(strip.background = element_rect(fill='white',size=1),
+        strip.text = element_text(size=10, color='black',face='bold'))
+
+aed.model.broadvtarget
+
 ```
 
-
-```{r, warning=FALSE, fig.width=14, fig.height=9}
+```{r, warning=FALSE, fig.width=14, fig.height=14}
 
 fig.PODNAM <- plot_grid(aed.asnm.lm,
                         aed.model.lm, 
-                        labels=c("A","B"),
+                        aed.model.broadvtarget,
+                        labels=c("A","B", "C"),
                         label_size=18,
-                        nrow=2,
-                        align='hv',
+                        nrow=3,
+                        #align='v',
                         #rel_widths = c(1,2),
                         #rel_heights = c(1,1),
-                        scale=c(0.8,1))
+                        scale=c(0.8,1,1))
 
 fig.PODNAM
 
@@ -2011,25 +2486,33 @@ file.dir <- paste('output/', sep='')
 file.name <- paste('/Fig_PODNAM_derivation_', Sys.Date(), '.tiff', sep='')
 file.path <- paste(file.dir, file.name, sep='')
 dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
-tiff(file.path, width=9, height=8, units='in', res=450)
+tiff(file.path, width=10, height=14, units='in', res=450)
 plot_grid(aed.asnm.lm,
                         aed.model.lm, 
-                        labels=c("A","B"),
+                        aed.model.broadvtarget,
+                        labels=c("A","B", "C"),
                         label_size=18,
-                        nrow=2,
-                        align='hv',
+                        nrow=3,
+                        align='v',
                         #rel_widths = c(1,2),
                         #rel_heights = c(1,1),
-                        scale=c(0.8,1))
+                        scale=c(0.8,1,1))
 dev.off()
 
-
 ```
+
 # Putting together the data sheet {.tabset .tabset-fade .tabset-pills}
 
+Add summary columns to dataframe
+
 ```{r, warning=FALSE}
-# add in the MLR model result
-asnm.tier1.all[,mlr.toxval25.aed50 := sum((coeff.tbl25[var_name=="aed50.atg"]$mlr_coeff)*aed50.atg 
+colnames(asnm.tier1.all)
+```
+
+```{r, warning=FALSE}
+# add in the MLR Results
+
+asnm.tier1.all[,mlr.toxval5.aed50 := sum((coeff.tbl25[var_name=="aed50.atg"]$mlr_coeff)*aed50.atg 
                 + (coeff.tbl25[var_name=="aed50.bsk"]$mlr_coeff)*aed50.bsk
                  + (coeff.tbl25[var_name=="aed50.ccte"]$mlr_coeff)*aed50.ccte
                  + (coeff.tbl25[var_name=="aed50.nvs"]$mlr_coeff)*aed50.nvs
@@ -2042,7 +2525,18 @@ asnm.tier1.all[,mlr.toxval25.aed50 := sum((coeff.tbl25[var_name=="aed50.atg"]$ml
                  + (coeff.tbl25[var_name=="aed50.astar.hepg2"]$mlr_coeff)*aed50.astar.hepg2
                  + (coeff.tbl25[var_name=="aed50.astar.hek293"]$mlr_coeff)*aed50.astar.hek293, na.rm=TRUE), by=c('dsstox_substance_id')]
 
-
+asnm.tier1.all[,mlr.toxval25.aed50 := sum((coeff.tbl25[var_name=="aed50.atg"]$mlr_coeff)*aed50.atg 
+                + (coeff.tbl25[var_name=="aed50.bsk"]$mlr_coeff)*aed50.bsk
+                 + (coeff.tbl25[var_name=="aed50.ccte"]$mlr_coeff)*aed50.ccte
+                 + (coeff.tbl25[var_name=="aed50.nvs"]$mlr_coeff)*aed50.nvs
+                 + (coeff.tbl25[var_name=="aed50.stm"]$mlr_coeff)*aed50.stm
+                 + (coeff.tbl25[var_name=="aed50.httr.mcf7"]$mlr_coeff)*aed50.httr.mcf7
+                 + (coeff.tbl25[var_name=="aed50.httr.u2os"]$mlr_coeff)*aed50.httr.u2os
+                 + (coeff.tbl25[var_name=="aed50.httr.heparg"]$mlr_coeff)*aed50.httr.heparg
+                 + (coeff.tbl25[var_name=="aed50.htpp.u2os"]$mlr_coeff)*aed50.htpp.u2os
+                 + (coeff.tbl25[var_name=="aed50.astar.beas2b"]$mlr_coeff)*aed50.astar.beas2b
+                 + (coeff.tbl25[var_name=="aed50.astar.hepg2"]$mlr_coeff)*aed50.astar.hepg2
+                 + (coeff.tbl25[var_name=="aed50.astar.hek293"]$mlr_coeff)*aed50.astar.hek293, na.rm=TRUE), by=c('dsstox_substance_id')]
 ```
 
 ```{r, warning=FALSE}
@@ -2054,10 +2548,27 @@ aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, aed50.astar.beas2b,
 aed50.astar.hepg2, aed50.astar.hek293),na.rm=TRUE)) %>% data.table()
 
 # take minimum, no ccte (no MEA)
-asnm.tier1.all[,min.aed50 := min(aed50.atg, 
+asnm.tier1.all <- asnm.tier1.all %>% rowwise() %>% mutate(min.aed50=min(c(aed50.atg, 
 aed50.bsk, aed50.nvs, aed50.stm, aed50.httr.mcf7, 
 aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os, aed50.astar.beas2b, 
-aed50.astar.hepg2, aed50.astar.hek293, na.rm=TRUE), by=c('dsstox_substance_id')]
+aed50.astar.hepg2, aed50.astar.hek293), na.rm=TRUE)) %>% data.table()
+
+# median of targeted NAMs (no CCTE - no MEA)
+asnm.tier1.all <- asnm.tier1.all %>% rowwise() %>% mutate(med.targeted.aed50=median(c(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm),na.rm=TRUE)) %>% data.table()
+
+# minimum of targeted NAMs
+asnm.tier1.all <- asnm.tier1.all %>% rowwise() %>% mutate(min.targeted.aed50=min(c(aed50.atg, 
+aed50.bsk, aed50.nvs, aed50.stm),na.rm=TRUE)) %>% data.table()
+
+# median of broad profiling
+asnm.tier1.all <- asnm.tier1.all %>% rowwise() %>% mutate(med.broad.aed50=median(c(aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg, aed50.htpp.u2os),na.rm=TRUE)) %>% data.table()
+
+# minimum of broad profiling
+asnm.tier1.all<- asnm.tier1.all %>% rowwise() %>% mutate(min.broad.aed50=min(c(aed50.httr.mcf7, 
+aed50.httr.u2os, aed50.httr.heparg),na.rm=TRUE)) %>% data.table()
+
 
 ```
 
@@ -2065,13 +2576,13 @@ aed50.astar.hepg2, aed50.astar.hek293, na.rm=TRUE), by=c('dsstox_substance_id')]
 
 # for input to hazard flag and BER calculation
 
-save(asnm.tier1.pred3, asnm.tier1.all, file= './output/aed_tbl_April2024.RData')
+save(asnm.tier1.pred3, asnm.tier1.all, file= './output/aed_tbl_Nov2024.RData')
 
 ```
 
 ```{r, warning=FALSE}
 
-load(file= './output/aed_tbl_April2024.RData')
+load(file= './output/aed_tbl_Nov2024.RData')
 ```
 
 # Load In vivo Data {.tabset .tabset-fade .tabset-pills}
@@ -2175,7 +2686,7 @@ invivo.all <- invivo.all[!is.na(dsstox_substance_id)]
 
 ```{r, warning=FALSE}
 
-invivo.all[is.na(CASRN)]
+#invivo.all[is.na(CASRN)]
 invivo.all[,c('casrn.x','name.x','chnm','name.y','casrn.y') := NULL]
 setcolorder(invivo.all, c(1,29:30,2:28,31:37))
 colnames(invivo.all)
@@ -2190,22 +2701,51 @@ kable(invivo.all,
     "$('body').css({'font-family': 'Calibri'});",
     "}"
   )))
-
 ```
 
+Make all units log10-mg/kg/day
 ```{r, warning=FALSE}
-
-
+# ECHA data
 invivo.all[, log.ECHA_min_systemic_POD_mkd := log10(ECHA_min_systemic_POD_mkd)]
 
-invivo.all[, log.repdose.90d.5th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p5.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
+# Toxval 
+invivo.all[, p5.toxval.numeric := log10(p5.toxval.numeric)]
+invivo.all[, p10.toxval.numeric := log10(p10.toxval.numeric)]
+invivo.all[, p15.toxval.numeric := log10(p15.toxval.numeric)]
+invivo.all[, p20.toxval.numeric := log10(p20.toxval.numeric)]
+invivo.all[, p25.toxval.numeric := log10(p25.toxval.numeric)]
+invivo.all[, p30.toxval.numeric := log10(p30.toxval.numeric)]
+
+# ToxVal - subchronic only
+invivo.all[, p5.toxval.numeric.sub := log10(p5.toxval.numeric.sub)]
+invivo.all[, p10.toxval.numeric.sub := log10(p10.toxval.numeric.sub)]
+invivo.all[, p15.toxval.numeric.sub := log10(p15.toxval.numeric.sub)]
+invivo.all[, p20.toxval.numeric.sub := log10(p20.toxval.numeric.sub)]
+invivo.all[, p25.toxval.numeric.sub := log10(p25.toxval.numeric.sub)]
+invivo.all[, p30.toxval.numeric.sub := log10(p30.toxval.numeric.sub)]
+```
+
+Make all log.repdose values that combine ECHA and ToxVal per logic
+```{r, warning=FALSE}
+
+# ToxVal
 invivo.all[, log.repdose.any.5th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p5.toxval.numeric, log.ECHA_min_systemic_POD_mkd)]
-invivo.all[, log.repdose.90d.25th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p25.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.any.10th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p10.toxval.numeric, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.any.15th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p15.toxval.numeric, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.any.20th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p20.toxval.numeric, log.ECHA_min_systemic_POD_mkd)]
 invivo.all[, log.repdose.any.25th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p25.toxval.numeric, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.any.30th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p30.toxval.numeric, log.ECHA_min_systemic_POD_mkd)]
+
+# ToxVal - subchronic only
+invivo.all[, log.repdose.90d.5th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p5.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.90d.10th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p10.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.90d.15th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p15.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.90d.20th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p20.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.90d.25th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p25.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
+invivo.all[, log.repdose.90d.30th := ifelse(is.na(log.ECHA_min_systemic_POD_mkd), p30.toxval.numeric.sub, log.ECHA_min_systemic_POD_mkd)]
 
 nrow(invivo.all[!is.na(log.repdose.90d.5th)]) # 163 chemicals with 90d repeat dose POD
 nrow(invivo.all[!is.na(log.repdose.any.25th)]) # 167 chemicals with any repeat dose POD
-
 ```
 # Compare ECHA and ToxVal values {.tabset .tabset-fade .tabset-pills}
 
@@ -2338,15 +2878,10 @@ pod.lm <- ggplot(data=invivo.all.long,
         strip.text = element_text(size=10, color='black',face='bold'))
 
 pod.lm
-
-
-
-
 ```
 
 
 ```{r, warning=FALSE}
-
 mytheme <- gridExtra::ttheme_minimal(core=list(padding.v=unit(0.1, 'mm'), padding.h=unit(0.1,'mm')))
 metric.grob <- grid.arrange(tableGrob(summ.pod, theme=mytheme))
 ```
@@ -2383,9 +2918,17 @@ asnm.tier1.all.invivo <- merge.data.table(asnm.tier1.all,
                                                         "ECHA_min_systemic_POD_mkd",
                                                         "log.ECHA_min_systemic_POD_mkd",
                                                         "log.repdose.90d.5th",
-                                                        "log.repdose.any.5th",
+                                                        "log.repdose.90d.10th",
+                                                        "log.repdose.90d.15th",
+                                                        "log.repdose.90d.20th",
                                                         "log.repdose.90d.25th",
-                                                        "log.repdose.any.25th")],
+                                                        "log.repdose.90d.30th",
+                                                        "log.repdose.any.5th",
+                                                        "log.repdose.any.10th",
+                                                        "log.repdose.any.15th",
+                                                        "log.repdose.any.20th",
+                                                        "log.repdose.any.25th",
+                                                        "log.repdose.any.30th")],
                                           all.x = TRUE,
                                           by='dsstox_substance_id')
 ```
@@ -2431,8 +2974,6 @@ write.xlsx(asnm.tier1.all.invivo, file='./output/asnm_tier1_all_invivo.xlsx')
 ```
 
 ```{r, warning=FALSE}
-
-
 kable(asnm.tier1.all.invivo[, c('log.repdose.any.5th',
                                     'med.aed50',
                                     'ttc',
@@ -2446,10 +2987,6 @@ kable(asnm.tier1.all.invivo[, c('log.repdose.any.5th',
     "$('body').css({'font-family': 'Calibri'});",
     "}"
   )))
-
-
-
-
 ```
 
 ```{r, warning=FALSE}
@@ -2464,7 +3001,6 @@ asnm.tier1.all.invivo.long <- melt.data.table(asnm.tier1.all.invivo,
                                     'sub.ratio'),
                  variable.name = c('ratio.type'),
                  value.name = c('ratio'))
-
 ```
 
 ```{r, warning=FALSE}
@@ -2484,12 +3020,9 @@ pod.ratios <- ggplot(data=asnm.tier1.all.invivo.long, aes(x=ratio,fill=ratio.typ
   geom_vline(xintercept=median(asnm.tier1.all.invivo$ttc.ratio, na.rm=TRUE), col='blue', linetype='dashed')
 
 pod.ratios
-
 ```
 
 ```{r, warning=FALSE}
-
-
 asnm.tier1.all.invivo[pod.ratio > 3, pod.ratio.size := as.character('med.aed50 too small')]
 asnm.tier1.all.invivo[pod.ratio < -3, pod.ratio.size := as.character('med.aed50 too big')]
 
@@ -2529,9 +3062,6 @@ dir.create(path=file.dir, showWarnings = FALSE, recursive = TRUE)
 tiff(file.path, width=8, height=9, units='in', res=450)
 plot_grid(pod.ratios, t.podratio, labels = c('A', 'B'), label_size = 18, nrow =2, rel_heights = c(1, 0.5))
 dev.off()
- 
-
-
 ```
 
 # ECDF Plots of POD ratios {.tabset .tabset-fade .tabset-pills}
@@ -2546,14 +3076,32 @@ Then we want to examine the use of these data in the POD ratio calculation via a
 colnames(asnm.tier1.all.invivo)
 #asnm.tier1.all.ratios <- asnm.tier1.all.invivo[,c(1,29:46, 59:61, 64, 67:68)] # need to reduce the col number of the data.table
 asnm.tier1.all.invivo[is.na(log.repdose.any.5th)] # 32 rows
+```
+
+All median and minimum battery POD ratios
+```{r,warning=FALSE}
+asnm.tier1.all.invivo[,pod.ratio10 := log.repdose.any.10th - med.aed50, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,pod.ratio15 := log.repdose.any.15th - med.aed50, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,pod.ratio20 := log.repdose.any.20th - med.aed50, by=dsstox_substance_id]
 asnm.tier1.all.invivo[,pod.ratio25 := log.repdose.any.25th - med.aed50, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,pod.ratio30 := log.repdose.any.30th - med.aed50, by=dsstox_substance_id]
+
+asnm.tier1.all.invivo[,pod.min.ratio5 := log.repdose.any.5th - min.aed50, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,pod.min.ratio10 := log.repdose.any.10th - min.aed50, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,pod.min.ratio15 := log.repdose.any.15th - min.aed50, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,pod.min.ratio20 := log.repdose.any.20th - min.aed50, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,pod.min.ratio25 := log.repdose.any.25th - min.aed50, by=dsstox_substance_id]
+asnm.tier1.all.invivo[,pod.min.ratio30 := log.repdose.any.30th - min.aed50, by=dsstox_substance_id]
+
 asnm.tier1.all.ratios <- as.data.table(asnm.tier1.all.invivo)
 
 ```
 
 Calculate ratios by specific assay technology, in the form log10(podtraditional - podnam). All of these values are already in log10 units.
 
-```{r calc-pod-ratio-assay, warning=FALSE}
+Targeted technologies to all ToxVal %iles
+
+```{r calc-targeted-assay-ratios, warning=FALSE}
 
 ## targeted technologies to 5th%ile POD
 
@@ -2563,6 +3111,30 @@ asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.m
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.nvs=log.repdose.any.5th - aed50.nvs,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.stm=log.repdose.any.5th - aed50.stm,na.rm=TRUE) %>% data.table()
 
+## targeted technologies to 10th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.atg=log.repdose.any.10th - aed50.atg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.biomap=log.repdose.any.10th - aed50.bsk,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.mea=log.repdose.any.10th - aed50.ccte,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.nvs=log.repdose.any.10th - aed50.nvs,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.stm=log.repdose.any.10th - aed50.stm,na.rm=TRUE) %>% data.table()
+
+## targeted technologies to 15th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.atg=log.repdose.any.15th - aed50.atg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.biomap=log.repdose.any.15th - aed50.bsk,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.mea=log.repdose.any.15th - aed50.ccte,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.nvs=log.repdose.any.15th - aed50.nvs,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.stm=log.repdose.any.15th - aed50.stm,na.rm=TRUE) %>% data.table()
+
+## targeted technologies to 20th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.atg=log.repdose.any.20th - aed50.atg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.biomap=log.repdose.any.20th - aed50.bsk,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.mea=log.repdose.any.20th - aed50.ccte,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.nvs=log.repdose.any.20th - aed50.nvs,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.stm=log.repdose.any.20th - aed50.stm,na.rm=TRUE) %>% data.table()
+
 ## targeted technologies to 25th%ile POD
 
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.atg=log.repdose.any.25th - aed50.atg,na.rm=TRUE) %>% data.table()
@@ -2571,12 +3143,44 @@ asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.nvs=log.repdose.any.25th - aed50.nvs,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.stm=log.repdose.any.25th - aed50.stm,na.rm=TRUE) %>% data.table()
 
+## targeted technologies to 30th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.atg=log.repdose.any.30th - aed50.atg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.biomap=log.repdose.any.30th - aed50.bsk,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.mea=log.repdose.any.30th - aed50.ccte,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.nvs=log.repdose.any.30th - aed50.nvs,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.stm=log.repdose.any.30th - aed50.stm,na.rm=TRUE) %>% data.table()
+```
+
+Broad technologies to all ToxVal %iles
+```{r, warning=FALSE}
 ## broad technologies to 5th%ile POD
 
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.httr.mcf7=log.repdose.any.5th - aed50.httr.mcf7,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.httr.u2os=log.repdose.any.5th - aed50.httr.u2os,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.httr.heparg=log.repdose.any.5th - aed50.httr.heparg,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.htpp.u2os=log.repdose.any.5th - aed50.htpp.u2os,na.rm=TRUE) %>% data.table()
+
+## broad technologies to 10th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.httr.mcf7=log.repdose.any.10th - aed50.httr.mcf7,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.httr.u2os=log.repdose.any.10th - aed50.httr.u2os,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.httr.heparg=log.repdose.any.10th - aed50.httr.heparg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.htpp.u2os=log.repdose.any.10th - aed50.htpp.u2os,na.rm=TRUE) %>% data.table()
+
+## broad technologies to 15th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.httr.mcf7=log.repdose.any.15th - aed50.httr.mcf7,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.httr.u2os=log.repdose.any.15th - aed50.httr.u2os,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.httr.heparg=log.repdose.any.15th - aed50.httr.heparg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.htpp.u2os=log.repdose.any.15th - aed50.htpp.u2os,na.rm=TRUE) %>% data.table()
+
+## broad technologies to 20th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.httr.mcf7=log.repdose.any.20th - aed50.httr.mcf7,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.httr.u2os=log.repdose.any.20th - aed50.httr.u2os,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.httr.heparg=log.repdose.any.20th - aed50.httr.heparg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.htpp.u2os=log.repdose.any.20th - aed50.htpp.u2os,na.rm=TRUE) %>% data.table()
 
 ## broad technologies to 25th%ile POD
 
@@ -2585,12 +3189,39 @@ asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.httr.heparg=log.repdose.any.25th - aed50.httr.heparg,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.htpp.u2os=log.repdose.any.25th - aed50.htpp.u2os,na.rm=TRUE) %>% data.table()
 
+## broad technologies to 30th%ile POD
 
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.httr.mcf7=log.repdose.any.30th - aed50.httr.mcf7,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.httr.u2os=log.repdose.any.30th - aed50.httr.u2os,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.httr.heparg=log.repdose.any.30th - aed50.httr.heparg,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.htpp.u2os=log.repdose.any.30th - aed50.htpp.u2os,na.rm=TRUE) %>% data.table()
+```
+
+ASTAR assays to all ToxVal %iles
+```{r, warning=FALSE}
 ## astar hipptox to 5th%ile POD
 
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.hipptox.beas2b=log.repdose.any.5th - aed50.astar.beas2b,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.hipptox.hepg2=log.repdose.any.5th - aed50.astar.hepg2,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.hipptox.hk2=log.repdose.any.5th - aed50.astar.hek293,na.rm=TRUE) %>% data.table()
+
+## astar hipptox to 10th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.hipptox.beas2b=log.repdose.any.10th - aed50.astar.beas2b,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.hipptox.hepg2=log.repdose.any.10th - aed50.astar.hepg2,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.hipptox.hk2=log.repdose.any.10th - aed50.astar.hek293,na.rm=TRUE) %>% data.table()
+
+## astar hipptox to 5th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.hipptox.beas2b=log.repdose.any.15th - aed50.astar.beas2b,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.hipptox.hepg2=log.repdose.any.15th - aed50.astar.hepg2,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.hipptox.hk2=log.repdose.any.15th - aed50.astar.hek293,na.rm=TRUE) %>% data.table()
+
+## astar hipptox to 5th%ile POD
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.hipptox.beas2b=log.repdose.any.20th - aed50.astar.beas2b,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.hipptox.hepg2=log.repdose.any.20th - aed50.astar.hepg2,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.hipptox.hk2=log.repdose.any.20th - aed50.astar.hek293,na.rm=TRUE) %>% data.table()
 
 ## astar hipptox to 25th %ile POD
 
@@ -2598,64 +3229,177 @@ asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.hipptox.hepg2=log.repdose.any.25th - aed50.astar.hepg2,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.hipptox.hk2=log.repdose.any.25th - aed50.astar.hek293,na.rm=TRUE) %>% data.table()
 
+## astar hipptox to 30th%ile POD
 
-## make ratios table
-asnm.tier1.all.ratios <- asnm.tier1.all.ratios[,c('dsstox_substance_id',
-                                                  'CASRN',
-                                                  'preferred_name',
-                                                  'apcra.pro.only',
-                                                  'med.aed50',
-                                                  'min.aed50',
-                                                  'log.repdose.any.5th',
-                                                  'log.repdose.any.25th',
-                                                  'pod.ratio',
-                                                  'pod.ratio25',
-                                                  'ratio5.atg',
-                                                  'ratio5.biomap',
-                                                  'ratio5.mea',
-                                                  'ratio5.nvs',
-                                                  'ratio5.stm',
-                                                  'ratio5.httr.mcf7',
-                                                  'ratio5.httr.u2os',
-                                                  'ratio5.httr.heparg',
-                                                  'ratio5.htpp.u2os',
-                                                  'ratio5.hipptox.beas2b',
-                                                  'ratio5.hipptox.hepg2',
-                                                  'ratio5.hipptox.hk2',
-                                                  'ratio25.atg',
-                                                  'ratio25.biomap',
-                                                  'ratio25.mea',
-                                                  'ratio25.nvs',
-                                                  'ratio25.stm',
-                                                  'ratio25.httr.mcf7',
-                                                  'ratio25.httr.u2os',
-                                                  'ratio25.httr.heparg',
-                                                  'ratio25.htpp.u2os',
-                                                  'ratio25.hipptox.beas2b',
-                                                  'ratio25.hipptox.hepg2',
-                                                  'ratio25.hipptox.hk2')]
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.hipptox.beas2b=log.repdose.any.30th - aed50.astar.beas2b,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.hipptox.hepg2=log.repdose.any.30th - aed50.astar.hepg2,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.hipptox.hk2=log.repdose.any.30th - aed50.astar.hek293,na.rm=TRUE) %>% data.table()
 
+colnames(asnm.tier1.all.ratios)
+```
+
+```{r, warning=FALSE}
 setnames(asnm.tier1.all.ratios, c('pod.ratio'), c('pod.ratio5'))
 ```
 
-Add calculation of ratios by median assay type (broad, targeted, hipptox, broad+targeted).
+Add calculation of %ile ratios by median assay type (broad, targeted, hipptox, broad+targeted).
 
-```{r calc-pod-ratios-type, warning=FALSE}
+Minimum targeted AED values for POD ratios.
+```{r min-aed-pod-ratios, warning=FALSE}
 
-asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.target=median(c(ratio5.atg,
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.min.target=min(c(ratio5.atg,
                                                                                                   ratio5.biomap,
-                                                                                                  ratio5.mea,
+                                                                                                  #ratio5.mea,
                                                                                                   ratio5.nvs,
                                                                                                   ratio5.stm), na.rm=TRUE)) %>% data.table()
 
-asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.coretarget=median(c(ratio5.atg,
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.min.target=min(c(ratio10.atg,
+                                                                                                  ratio10.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio10.nvs,
+                                                                                                  ratio10.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.min.target=min(c(ratio15.atg,
+                                                                                                  ratio15.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio15.nvs,
+                                                                                                  ratio15.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.min.target=min(c(ratio20.atg,
+                                                                                                  ratio20.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio20.nvs,
+                                                                                                  ratio20.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.min.target=min(c(ratio25.atg,
+                                                                                                  ratio25.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio25.nvs,
+                                                                                                  ratio25.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.min.target=min(c(ratio30.atg,
+                                                                                                  ratio30.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio30.nvs,
+                                                                                                  ratio30.stm), na.rm=TRUE)) %>% data.table()
+```
+
+Median targeted AED values for POD ratios
+```{r med-aed-pod-ratios, warning=FALSE}
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.target=median(c(ratio5.atg,
                                                                                                   ratio5.biomap,
-                                                                                                  ratio5.nvs), na.rm=TRUE)) %>% data.table()
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio5.nvs,
+                                                                                                  ratio5.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.med.target=median(c(ratio10.atg,
+                                                                                                  ratio10.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio10.nvs,
+                                                                                                  ratio10.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.med.target=median(c(ratio15.atg,
+                                                                                                  ratio15.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio15.nvs,
+                                                                                                  ratio15.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.med.target=median(c(ratio20.atg,
+                                                                                                  ratio20.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio20.nvs,
+                                                                                                  ratio20.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.target=median(c(ratio25.atg,
+                                                                                                  ratio25.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio25.nvs,
+                                                                                                  ratio25.stm), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.med.target=median(c(ratio30.atg,
+                                                                                                  ratio30.biomap,
+                                                                                                  #ratio5.mea,
+                                                                                                  ratio30.nvs,
+                                                                                                  ratio30.stm), na.rm=TRUE)) %>% data.table()
+```
+
+Min broad AED values for POD ratios
+
+```{r min-broad-pod-ratios, warning=FALSE}
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.min.broad=min(c(ratio5.httr.mcf7,
+                                                                                                  ratio5.httr.u2os,
+                                                                                                  ratio5.httr.heparg,
+                                                                                                  ratio5.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.min.broad=min(c(ratio10.httr.mcf7,
+                                                                                                  ratio10.httr.u2os,
+                                                                                                  ratio10.httr.heparg,
+                                                                                                  ratio10.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.min.broad=min(c(ratio15.httr.mcf7,
+                                                                                                  ratio15.httr.u2os,
+                                                                                                  ratio15.httr.heparg,
+                                                                                                  ratio15.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.min.broad=min(c(ratio20.httr.mcf7,
+                                                                                                  ratio20.httr.u2os,
+                                                                                                  ratio20.httr.heparg,
+                                                                                                  ratio20.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.min.broad=min(c(ratio25.httr.mcf7,
+                                                                                                  ratio25.httr.u2os,
+                                                                                                  ratio25.httr.heparg,
+                                                                                                  ratio25.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.min.broad=min(c(ratio30.httr.mcf7,
+                                                                                                  ratio30.httr.u2os,
+                                                                                                  ratio30.httr.heparg,
+                                                                                                  ratio30.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+```
+
+Median broad AED values for POD ratios
+```{r med-broad-pod-ratios, warning=FALSE}
 
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.broad=median(c(ratio5.httr.mcf7,
                                                                                                   ratio5.httr.u2os,
                                                                                                   ratio5.httr.heparg,
                                                                                                   ratio5.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio10.med.broad=median(c(ratio10.httr.mcf7,
+                                                                                                  ratio10.httr.u2os,
+                                                                                                  ratio10.httr.heparg,
+                                                                                                  ratio10.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio15.med.broad=median(c(ratio15.httr.mcf7,
+                                                                                                  ratio15.httr.u2os,
+                                                                                                  ratio15.httr.heparg,
+                                                                                                  ratio15.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio20.med.broad=median(c(ratio20.httr.mcf7,
+                                                                                                  ratio20.httr.u2os,
+                                                                                                  ratio20.httr.heparg,
+                                                                                                  ratio20.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.broad=median(c(ratio25.httr.mcf7,
+                                                                                                  ratio25.httr.u2os,
+                                                                                                  ratio25.httr.heparg,
+                                                                                                  ratio25.htpp.u2os), na.rm=TRUE)) %>% data.table()
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.med.broad=median(c(ratio30.httr.mcf7,
+                                                                                                  ratio30.httr.u2os,
+                                                                                                  ratio30.httr.heparg,
+                                                                                                  ratio30.htpp.u2os), na.rm=TRUE)) %>% data.table()
+```
+
+Other pod ratios needed for summary plots
+```{r calc-other-pod-ratios, warning=FALSE}
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.coretarget=median(c(ratio5.atg,
+                                                                                                  ratio5.biomap,
+                                                                                                  ratio5.nvs), na.rm=TRUE)) %>% data.table()
 
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.med.hipptox=median(c(ratio5.hipptox.beas2b, ratio5.hipptox.hepg2,ratio5.hipptox.hk2),na.rm=TRUE)) %>% data.table()
 
@@ -2666,27 +3410,13 @@ asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.m
                                                                                                   ratio5.httr.u2os,
                                                                                                   ratio5.httr.heparg,
                                                                                                   ratio5.htpp.u2os), na.rm=TRUE)) %>% data.table()
-
 ```
 
 ```{r calc-pod-ratios25-type, warning=FALSE}
 
-asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.target=median(c(ratio25.atg,
-                                                                                                  ratio25.biomap,
-                                                                                                  ratio25.mea,
-                                                                                                  ratio25.nvs,
-                                                                                                  ratio25.stm),
-                                                                                                  na.rm=TRUE)) %>% data.table()
-
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.coretarget=median(c(ratio25.atg,
                                                                                                   ratio25.biomap,
                                                                                                   ratio25.nvs), na.rm=TRUE)) %>% data.table()
-
-asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.broad=median(c(ratio25.httr.mcf7,
-                                                                                                  ratio25.httr.u2os,
-                                                                                                ratio25.httr.heparg,
-                                                                                                  ratio25.htpp.u2os),
-                                                                                                 na.rm=TRUE)) %>% data.table()
 
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.med.hipptox = median(c(ratio25.hipptox.beas2b, ratio25.hipptox.hepg2,ratio25.hipptox.hk2),na.rm=TRUE)) %>% data.table()
 
@@ -2754,59 +3484,9 @@ asnm.tier1.all.ratios.long <- melt.data.table(asnm.tier1.all.ratios,
                                                   ),
                                               variable.name = c('Ratio'),
                                               value.name = c('Ratio.value'))
-
-
-
 ```
-
 
 Work on ECDF plot.
-
-```{r,warning=FALSE, fig.width=10, fig.height=6, eval=FALSE, echo=FALSE}
-
-fig.ratio.ecdf <- ggplot(asnm.tier1.all.ratios.long[Ratio.name %in% c('pod.ratio',
-                                                  'ratio.atg',
-                                                  'ratio.biomap',
-                                                  'ratio.mea',
-                                                  'ratio.nvs',
-                                                  'ratio.stm',
-                                                  'ratio.httr.mcf7',
-                                                  'ratio.httr.u2os',
-                                                  'ratio.httr.heparg',
-                                                  'ratio.htpp.u2os',
-                                                  'ratio.hipptox.beas2b',
-                                                  'ratio.hipptox.hepg2',
-                                                  'ratio.hipptox.hk2')], aes(Ratio, color=Type))+
-  stat_ecdf(geom='step', size=1.5)+
-  scale_y_continuous(trans = 'log10',
-                     breaks= c(0.01, 0.1,0.2,0.3,0.4,0.5,0.75, 1))+
-  ylab("Cumulative Frequency") +
-  xlab('log10 POD Ratio')+
-  theme_bw() +
-  theme(
-    axis.line = element_line(colour = "black"),
-    axis.text = element_text(size=10),
-    axis.title = element_text(size=12, face='bold'))+
-  theme(axis.text.y = element_text(family = "sans", face = "bold", size=12))+
-  theme(legend.position="right", legend.title=element_blank())+
-  scale_x_continuous(breaks=seq(-5,10,1)) +
-  coord_cartesian(xlim = c(-5, 10)) +
-  #scale_color_viridis(discrete=TRUE, name='Ratio Type')+
-  scale_colour_manual(breaks=c('pod.ratio', 'ratio.atg','ratio.biomap','ratio.mea','ratio.nvs','ratio.stm',
-                               'ratio.httr.mcf7','ratio.httr.u2os','ratio.httr.heparg','ratio.htpp.u2os','ratio.hipptox.beas2b', 'ratio.hipptox.hepg2','ratio.hipptox.hk2'),
-                      values=c("red", "#440154FF", "#3B528BFF", "#21908CFF", "#5DC863FF", "#FDE725FF",
-                                     "#B63679FF", "#E65164FF", "#FB8861FF", "#FEC287FF",
-                                    "grey", "blue","purple"),
-                      labels=c("MED POD Ratio", "POD-ATG Ratio", "POD-BioMAP Ratio", "POD-MEA Ratio", "POD-NVS Ratio", "POD-STM Ratio", "POD-HTTr MCF7 Ratio", "POD-HTTr U2-OS Ratio", "POD-HTTr HepaRG Ratio", "POD-HTPP U2-OS Ratio", 'POD-HIPPTox BEAS-2B Ratio', 'POD-HIPPTox HepG2 Ratio', 'POD-HIPPTox HK2 Ratio'))+
-  geom_vline(xintercept=-2, lty='dashed', color='red')+
-  geom_vline(xintercept=2, lty='dashed', color='red')+
-  geom_vline(xintercept=0, color='red')+
-  geom_hline(yintercept=0.90, lty='dashed', color='red')
-
-fig.ratio.ecdf
-
-```
-
 ```{r, warning=FALSE, fig.width=10, fig.height=6}
 fig.ratio.ecdfa <- ggplot(asnm.tier1.all.ratios.long[Ratio %in% c('pod.ratio5',
                                                   'ratio5.med.target',
@@ -2887,13 +3567,9 @@ fig.ratio.ecdfb
 
 ```
 ```{r, warning=FALSE, fig.width=9, fig.height=10}
-
-
 plot_grid(fig.ratio.ecdfa,
           fig.ratio.ecdfb,
           labels = c('A', 'B'), label_size = 18, nrow =2)
-
-
 ```
 
 ```{r, warning=FALSE, eval=FALSE}
@@ -3002,6 +3678,14 @@ tiff(file.path, width=8, height=6, units='in', res=300)
 fig.box.pod.ratio
 dev.off()
 
+
+```
+# Update Table 2 with Ratio Counts
+
+```{r, warning=FALSE}
+
+
+nonNA_counts <- as.data.frame(sapply(asnm.tier1.all.ratios, function(x) sum(!is.na(x))))
 
 ```
 

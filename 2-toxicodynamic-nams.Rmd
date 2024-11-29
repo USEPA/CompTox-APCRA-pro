@@ -308,6 +308,7 @@ mega.mc5.hitc1[,modl_ga_5p := quantile(modl_ga, probs=c(0.05),na.rm=TRUE), by=li
 mega.mc5.hitc1[,asnm_modl_ga_5p := quantile(modl_ga, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id, asnm)]
 #unique(mega.mc5.hitc1$asnm) everything, 17 asid
 mega.mc5.hitc1[,ac50_5p := quantile(ac50_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id)]
+colnames(mega.mc5.hitc1)
 mega.mc5.hitc1[,asnm_ac50_5p := quantile(ac50_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id, asnm)]
 
 mega.mc5.hitc1[,modl_acc_5p := quantile(modl_acc, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id)]
@@ -316,9 +317,42 @@ mega.mc5.hitc1[,asnm_modl_acc_5p := quantile(modl_acc, probs=c(0.05),na.rm=TRUE)
 mega.mc5.hitc1[,acc_5p := quantile(acc_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id)]
 mega.mc5.hitc1[,asnm_acc_5p := quantile(acc_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id, asnm)]
 
+```
+
+```{r add-more-mins, warning=FALSE}
+## add a min and med for all assays included in the set in response to R1
+
+#unique(mega.mc5.hitc1$asnm)
+#unique(mega.mc5.hitc1[asnm=='CCTE']$aenm) #confirmed that CCTE only contained MEA acute data
+#need to include only ATG, BSK, CCTE, NVS, STM
+mega.mc5.hitc1.set <- mega.mc5.hitc1[asnm %in% c('ATG','BSK','CCTE','NVS','STM')]
+mega.mc5.hitc1.set[,acc_min_set := min(acc_uM, na.rm=TRUE), by=list(dsstox_substance_id)]
+mega.mc5.hitc1.set[,acc_med_set := median(acc_uM, na.rm=TRUE), by=list(dsstox_substance_id)]
+mega.mc5.hitc1.set[,ac50_min_set := min(ac50_uM, na.rm=TRUE), by=list(dsstox_substance_id)]
+mega.mc5.hitc1.set[,ac50_med_set := median(ac50_uM, na.rm=TRUE), by=list(dsstox_substance_id)]
+mega.mc5.hitc1.set[,acc_5p_set := quantile(acc_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id) ]
+mega.mc5.hitc1.set[,ac50_5p_set := quantile(ac50_uM, probs=c(0.05),na.rm=TRUE), by=list(dsstox_substance_id) ]
 
 ```
-## Make wide version
+
+## Create helper table of cross-assay values
+
+```{r, warning=FALSE}
+
+asnm.tnams.add <- unique(mega.mc5.hitc1.set[,c('chnm',
+                                               'dsstox_substance_id',
+                                               'acc_5p_set',
+                                               'ac50_5p_set',
+                                               'acc_min_set',
+                                               'acc_med_set',
+                                               'ac50_min_set',
+                                               'ac50_med_set')])
+                    
+
+```
+
+
+## Make wide version with min ACC potency by source
 
 * Minimum ACC potency by vendor/source included in case study.
 
@@ -359,6 +393,7 @@ hth295r <- as.data.table(dbGetQuery(con, "select * from prod_internal_invitrodb_
 
 save(apcra.list,
      asnm.tnams,
+     asnm.tnams.add, #added for R1
      cerapp,
      compara,
      er,
@@ -366,13 +401,14 @@ save(apcra.list,
      hth295r,
      mega.mc5,
      mega.mc5.hitc1,
+     mega.mc5.hitc1.set, # added for R1
      sc2.stm,
-     file='./source/invitrodb_apcra_pro_invitrodb3_5_2023.RData')
+     file='./source/in_vitro/tier1_NAMs_apcra_pro_11242024.RData')
 
 ```
 
 ```{r, warning=FALSE}
-load('./source/in_vitro/tier1_NAMs_apcra_pro_04032023.RData')
+load('./source/in_vitro/tier1_NAMs_apcra_pro_02262024.RData')
 ```
 
 # Step 3: Add Broad Profiling NAMs {.tabset .tabset-fade .tabset-pills}
@@ -394,8 +430,6 @@ load('./source/in_vitro/tier1_NAMs_apcra_pro_04032023.RData')
 #RSJ advises to use pod_sig
 
 httr.u2os <- as.data.table(read.xlsx('./source/super_target_boxplot_U2OS_u2os_toxcast_pfas_pe1_normal_v2_screen_large_gsea_0.9_1_3_summary.xlsx', sheet=1, colNames=TRUE))
-
-
 
 httr.mcf7 <- as.data.table(read.xlsx('./source/super_target_boxplot_MCF7_mcf7_ph1_pe1_normal_block_123_allPG_screen_large_gsea_0.9_1_3_summary.xlsx', sheet=1, colNames=TRUE))
 
@@ -900,7 +934,8 @@ save(apcra.list,
      httr.pod,
      PACList.apcra,
      asnm.tier1,
-     file='./source/in_vitro/tier1_NAMs_apcra_pro_02262024.RData')
+     asnm.tnams.add, # add this file for future comparisons for R1
+     file='./source/in_vitro/tier1_NAMs_apcra_pro_11242024.RData')
 ```
 
 ## Additional investigations of in vitro potency
