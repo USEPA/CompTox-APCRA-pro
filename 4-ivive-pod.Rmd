@@ -3235,7 +3235,12 @@ asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.hipptox.hepg2=log.repdose.any.30th - aed50.astar.hepg2,na.rm=TRUE) %>% data.table()
 asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio30.hipptox.hk2=log.repdose.any.30th - aed50.astar.hek293,na.rm=TRUE) %>% data.table()
 
-colnames(asnm.tier1.all.ratios)
+```
+MLR ratios
+```{r, warning=FALSE}
+
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio5.mlr5=log.repdose.any.5th - mlr.toxval5.aed50,na.rm=TRUE) %>% data.table()
+asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.mlr25=log.repdose.any.25th - mlr.toxval25.aed50,na.rm=TRUE) %>% data.table()
 ```
 
 ```{r, warning=FALSE}
@@ -3427,7 +3432,6 @@ asnm.tier1.all.ratios <- asnm.tier1.all.ratios %>% rowwise() %>% mutate(ratio25.
                                                                                                   ratio25.httr.u2os,
                                                                                                   ratio25.httr.heparg,
                                                                                                   ratio25.htpp.u2os),na.rm=TRUE)) %>% data.table()
-colnames(asnm.tier1.all.ratios)
 ```
 
 Need to melt the ratios into long format by ratio type.
@@ -3683,12 +3687,151 @@ dev.off()
 # Update Table 2 with Ratio Counts
 
 ```{r, warning=FALSE}
+# get Inf to NA in table
+for (j in 1:ncol(asnm.tier1.all.ratios)) set(asnm.tier1.all.ratios, which(is.infinite(asnm.tier1.all.ratios[[j]])), j, NA)
 
-
-nonNA_counts <- as.data.frame(sapply(asnm.tier1.all.ratios, function(x) sum(!is.na(x))))
+## reduce table to the Table 2 outputs
+#dput(colnames(asnm.tier1.all.ratios))
+non_NA_counts <- as.data.frame(sapply(asnm.tier1.all.ratios, function(x) sum(!is.na(x))))
+asnm.ratio.counts <- as.data.table(asnm.tier1.all.ratios[,c("min.aed50", # AED50 values
+                                                            "med.aed50", 
+                                                            "min.broad.aed50",
+                                                            "min.targeted.aed50", 
+                                                            "med.broad.aed50",
+                                                            "med.targeted.aed50", 
+                                                            "aed50.atg", 
+                                                            "aed50.bsk", 
+                                                            "aed50.nvs", 
+                                                            "aed50.stm", 
+                                                            "aed50.htpp.u2os",
+                                                            "aed50.httr.heparg",
+                                                            "aed50.httr.mcf7", 
+                                                            "aed50.httr.u2os",
+                                                            "aed50.astar.beas2b",
+                                                            "aed50.astar.hepg2",
+                                                            "aed50.astar.hek293",
+                                                            "mlr.toxval5.aed50", 
+                                                            "mlr.toxval25.aed50",
+                                                            
+                                                            "log.repdose.any.5th", #ToxVal+ECHA in vivo values
+                                                            "log.repdose.any.10th",
+                                                            "log.repdose.any.15th",
+                                                            "log.repdose.any.20th",
+                                                            "log.repdose.any.25th",
+                                                            "log.repdose.any.30th", 
+                                                            
+                                                            "pod.min.ratio5", # Battery Min POD ratios
+                                                            "pod.min.ratio10",
+                                                            "pod.min.ratio15",
+                                                            "pod.min.ratio20",
+                                                            "pod.min.ratio25",
+                                                            "pod.min.ratio30",
+                                                            
+                                                            "pod.ratio5", # Battery Med POD ratios
+                                                            "pod.ratio10",
+                                                            "pod.ratio15", 
+                                                            "pod.ratio20",
+                                                            "pod.ratio25", 
+                                                            "pod.ratio30",
+                                                            
+                                                            "ratio5.min.broad", # Min Broad POD ratios
+                                                            "ratio10.min.broad",
+                                                            "ratio15.min.broad",
+                                                            "ratio20.min.broad",
+                                                            "ratio25.min.broad",
+                                                            "ratio30.min.broad",
+                                                             
+                                                            "ratio5.min.target", # Min Targeted POD ratios
+                                                            "ratio10.min.target",
+                                                            "ratio15.min.target",
+                                                            "ratio20.min.target",
+                                                            "ratio25.min.target", 
+                                                            "ratio30.min.target", 
+                                                            
+                                                            "ratio5.med.broad", # Med Broad POD ratios
+                                                            "ratio10.med.broad", 
+                                                            "ratio15.med.broad", 
+                                                            "ratio20.med.broad", 
+                                                            "ratio25.med.broad", 
+                                                            "ratio30.med.broad", 
+                                                            
+                                                            "ratio5.med.target", # Med targeted pod ratios
+                                                            "ratio10.med.target", 
+                                                            "ratio15.med.target", 
+                                                            "ratio20.med.target", 
+                                                            "ratio25.med.target", 
+                                                            "ratio30.med.target",  
+                                                            
+                                                            "ratio5.atg", # individual assays
+                                                            "ratio5.biomap",
+                                                            "ratio5.nvs", 
+                                                            "ratio5.stm",
+                                                            
+                                                            "ratio5.htpp.u2os", 
+                                                            "ratio5.httr.heparg",
+                                                            "ratio5.httr.mcf7", 
+                                                            "ratio5.httr.u2os", 
+                                                             
+                                                            "ratio5.hipptox.beas2b", 
+                                                            "ratio5.hipptox.hepg2",
+                                                            "ratio5.hipptox.hk2",
+                                                            
+                                                            
+                                                            "ratio5.mlr5", #MLR models
+                                                            "ratio25.mlr25",
+                                                            
+                                                            "ratio5.med.coretarget", # other ratios from figures - not in table2
+                                                            "ratio5.med.hipptox", 
+                                                            "ratio5.med.brta", 
+                                                            "ratio25.med.coretarget", 
+                                                            "ratio25.med.hipptox", 
+                                                            "ratio25.med.brta"
+                                                            )])
 
 ```
 
+```{r, warning=FALSE}
+counts_ratios_notNA <- as.data.frame(sapply(asnm.ratio.counts, function(x) sum(!is.na(x))))
+count_ratios_gte0 <- as.data.frame(sapply(asnm.ratio.counts, function(x) sum(x >=0, na.rm=TRUE)))
+count_ratios_win2 <- as.data.frame(sapply(asnm.ratio.counts, function(x) sum(x >= -2 & x<=2, na.rm=TRUE)))
+count_ratios_gteneg2 <- as.data.frame(sapply(asnm.ratio.counts, function(x) sum(x >= -2, na.rm=TRUE)))
+
+asnm.summary.counts <- cbind.data.frame(counts_ratios_notNA,
+                                                      count_ratios_gte0,
+                                                      count_ratios_win2,
+                                        count_ratios_gteneg2)
+
+asnm.summary.counts <- rownames_to_column(asnm.summary.counts, var="RatioType")
+asnm.summary.counts <- as.data.table(asnm.summary.counts)
+setnames(asnm.summary.counts, c(2,3,4,5), c('count','count-gte0','count-win2', 'count-gteneg2'))
+
+asnm.summary.counts[,podratiogt0 := round(((count_ratios_gte0/158)*100),1)]
+asnm.summary.counts[,podratiowin2 := round(((count_ratios_win2/158)*100),1)]
+asnm.summary.counts[,podratiogteneg2 := round(((count_ratios_gteneg2/158)*100),1)]
+
+```
+
+Merge with performance Table 2.
+
+```{r, warning=FALSE}
+
+tbl2.part2 <- asnm.summary.counts[-c(1:25,75:80),]
+
+nr <- max(nrow(models_performance_summary), nrow(tbl2.part2))
+tbl2 <- cbind(models_performance_summary[1:nr, ], tbl2.part2[1:nr, ])
+
+```
+
+Write files
+
+```{r, warning=FALSE}
+
+
+list_data <- list("Table2" = as.data.frame(tbl2),
+                  "All-pod-ratios" = as.data.frame(asnm.tier1.all.ratios))
+
+write.xlsx(list_data, './output/table2_podratios_29nov2024.xlsx')
+```
 
 # Reproducibility
 
