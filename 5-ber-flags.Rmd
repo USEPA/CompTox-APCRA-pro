@@ -60,14 +60,17 @@ library(ComplexHeatmap)
 # Load Data {.tabset .tabset-fade .tabset-pills}
 
 ```{r, warning=FALSE}
+## these were the files originally loaded
+#load(file='./source/in_vitro/tier1_NAMs_apcra_pro_02262024.RData')
+#load(file='./source/chem/apcra_chem_ad.RData')
+#asnm.tier1.all.invivo <- read.xlsx('./output/asnm_tier1_all_invivo.xlsx', colNames = TRUE, sheet=1) %>% as.data.table()
+#seem3 <- fread('./source/exposure/SupTable-all.chem.preds-2018-11-28.txt')
 
-load(file='./source/in_vitro/tier1_NAMs_apcra_pro_02262024.RData')
-load(file='./source/chem/apcra_chem_ad.RData')
-asnm.tier1.all.invivo <- read.xlsx('./output/asnm_tier1_all_invivo.xlsx', colNames = TRUE, sheet=1) %>% as.data.table()
-seem3 <- fread('./source/exposure/SupTable-all.chem.preds-2018-11-28.txt')
+## in subsequent revision, we load the RData to simplify
+load('./output/APCRA_haz_flg_BER.RData')
 
 # I tried using this RData from Git but it did not contain any of our DTXSIDs:
-#load('./source/exposure/new.chem.preds-2019-12-13.RData')
+#load(file='./source/exposure/new.chem.preds-2019-12-13.RData')
 #seem3 <- chem.preds
 ```
 
@@ -81,22 +84,22 @@ colnames(mega.mc5) # this is going to have the hazard information we need
 * Here are the 8 APCRA substances for which there are no SEEM3 data reported.
 * They appear generally to be salts, with a few that are not.
 
-```{r, warning=FALSE}
+```{r, warning=FALSE, eval=FALSE}
 seem.apcra <- seem3[dsstox_substance_id %in% apcra.list[,DTXSID]] # only 193...
 
 apcra.list[!DTXSID %in% seem.apcra$dsstox_substance_id]
 ```
 
-* Fifteen chemicals had missing SEEM3 U95 values, see below.
+* Fifteen chemicals had missing SEEM3 U95 values.
 
-```{r, warning=FALSE}
+```{r, warning=FALSE, eval=FALSE}
 seem.apcra[is.na(seem3.u95) & !is.na(seem3)]
 ```
 
 * For these, the median SEEM3 estimate was substituted.
 * log10-SEEM3 values were also calculated for log10 BER computation.
 
-```{r, warning=FALSE}
+```{r, warning=FALSE, eval=FALSE}
 seem.apcra[is.na(seem3.u95)& !is.na(seem3), seem3.u95 := seem3]
 seem.apcra[,seem3.log10 := log10(seem3)]
 seem.apcra[,seem3.u95.log10 := log10(seem3.u95)]
@@ -105,7 +108,7 @@ seem.apcra[,seem3.u95.log10 := log10(seem3.u95)]
 
 * Adding in SEEM3 to the sheet and calculating BERs.
 
-```{r calc-bers, warning=FALSE}
+```{r calc-bers, warning=FALSE, eval=FALSE}
 
 asnm.tier1.all.invivo$seem3.u95.log10 <- seem.apcra$seem3.u95.log10[match(asnm.tier1.all.invivo$dsstox_substance_id,
                                                 seem.apcra$dsstox_substance_id)]
@@ -526,7 +529,7 @@ redo_tables <- list('Table1_HighPriorityChems' = as.data.frame(Table1redo),
                     'Table2_LowPriorityChems' = as.data.frame(Table2redo))
 
 
-write.xlsx(redo_tables, './output/Draft_Table1_Table2_APCRA_Pro_27May2024.xlsx')
+#write.xlsx(redo_tables, './output/Draft_Table1_Table2_APCRA_Pro_27May2024.xlsx')
 
 ```
 
@@ -947,6 +950,16 @@ dart.flag$ber.med.aed50 <- asnm.tier1.all.invivo$ber.med.aed50[match(dart.flag$d
                                                                      asnm.tier1.all.invivo$dsstox_substance_id)]
 
 dart.flag <- dart.flag[order(ber.med.aed50)]
+
+# TEST in CCD was missing values
+dart.flag[dsstox_substance_id=='DTXSID2020634',test.devtox.score := 0.713]
+dart.flag[dsstox_substance_id=='DTXSID6025438', test.devtox.score := 0.571]
+dart.flag[dsstox_substance_id=='DTXSID7021239', test.devtox.score := 0.983]
+dart.flag[dsstox_substance_id=='DTXSID9022524', test.devtox.score := 0.981]
+dart.flag[dsstox_substance_id %in% c('DTXSID2020634',
+                                     'DTXSID6025438',
+                                     'DTXSID7021239',
+                                     'DTXSID9022524'), dev.test := 0.5]
 ```
 
 

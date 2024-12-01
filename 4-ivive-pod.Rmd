@@ -2349,7 +2349,7 @@ This next part is a summary visualization of some of the models for the paper.
 # new facet labels
 model.labels <- c('Min AED50',
                   'Med AED50',
-                  'MLR AED50 : ToxVal 25th%ile')
+                  'MLR AED50 : ToxVal 5th%ile')
 names(model.labels) <- c('min.aed50','med.aed50','mlr.pred25')
 
 
